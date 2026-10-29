@@ -26,8 +26,17 @@ import { zodToOpenAITool } from './utils'
 interface EngineCacheEntry {
 	enginePromise: Promise<any>
 	refCount: number
+	/** Pending unload, started when the last client releases the engine. */
+	unloadTimer?: ReturnType<typeof setTimeout>
 }
 const engineCache = new Map<string, EngineCacheEntry>()
+
+/**
+ * How long an engine stays loaded after its last client disposes. Screens hand an LLM over to each
+ * other (the old one is disposed as the new one starts): unloading at once would tear the engine down
+ * under the new client's first request ("Object has already been disposed") or force a reload.
+ */
+export const ENGINE_UNLOAD_GRACE_MS = 30_000
 
 export class BrowserLLMClient implements LLMClient {
 	config: ResolvedLLMConfig
@@ -95,12 +104,21 @@ export class BrowserLLMClient implements LLMClient {
 			console.log('[BrowserLLMClient] getEngine() - reusing cached engine for', this.modelId)
 		}
 
+		// A client used again after dispose() (React re-runs effects on the same instance) takes its
+		// reference back.
+		if (this.disposed) {
+			this.disposed = false
+			this.acquired = false
+		}
+
 		// Only count this client instance toward the model's refcount once, no matter
 		// how many times invoke()/invokeText() call getEngine().
 		if (!this.acquired) {
 			this.acquired = true
 			entry.refCount++
 		}
+		clearTimeout(entry.unloadTimer)
+		entry.unloadTimer = undefined
 
 		return entry.enginePromise
 	}
@@ -276,7 +294,8 @@ export class BrowserLLMClient implements LLMClient {
 
 	/**
 	 * Unloads the model engine from GPU/WASM memory once the last BrowserLLMClient
-	 * referencing this model id disposes - see the refcounting note on `engineCache`.
+	 * referencing this model id has disposed and ENGINE_UNLOAD_GRACE_MS has passed without
+	 * another client taking it - see the refcounting note on `engineCache`.
 	 */
 	dispose(): void {
 		if (this.disposed) return
@@ -286,10 +305,16 @@ export class BrowserLLMClient implements LLMClient {
 		const entry = engineCache.get(this.modelId)
 		if (!entry) return
 
+		this.acquired = false
 		entry.refCount--
-		if (entry.refCount <= 0) {
-			engineCache.delete(this.modelId)
-			entry.enginePromise.then((engine) => engine.unload?.()).catch(() => {})
+		if (entry.refCount <= 0 && entry.unloadTimer === undefined) {
+			const modelId = this.modelId
+			entry.unloadTimer = setTimeout(() => {
+				entry.unloadTimer = undefined
+				if (entry.refCount > 0 || engineCache.get(modelId) !== entry) return
+				engineCache.delete(modelId)
+				entry.enginePromise.then((engine) => engine.unload?.()).catch(() => {})
+			}, ENGINE_UNLOAD_GRACE_MS)
 		}
 	}
 }

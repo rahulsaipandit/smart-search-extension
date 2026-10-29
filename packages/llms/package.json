@@ -44,9 +44,7 @@
     "scripts": {
         "build": "vite build",
         "test": "vitest run --project llms",
-        "test:live": "vitest run --project llms:live",
-        "prepublishOnly": "node ../../scripts/pre-publish.js",
-        "postpublish": "node ../../scripts/post-publish.js"
+        "test:live": "vitest run --project llms:live"
     },
     "dependencies": {
         "chalk": "^6.0.0"

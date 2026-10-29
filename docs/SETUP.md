@@ -117,8 +117,8 @@ npm run dev -w @page-agent/ext
 Starts WXT in watch mode and opens a browser with the extension hot-loaded. Chrome profile is stored at `packages/extension/.wxt/chrome-data/`.
 
 **Required browser permissions** (declared in `wxt.config.js`):
-- `tabs`, `tabGroups`, `sidePanel`, `storage`
-- `host_permissions: ['<all_urls>']`
+- `sidePanel`, `storage`, `offscreen`
+- No `host_permissions`, `tabs` or `tabGroups`
 
 ### Demo Mode
 
@@ -131,22 +131,6 @@ Runs the `page-agent` IIFE demo build with a local file server on port `5174`. U
 ---
 
 ## Building
-
-### All Packages
-
-```bash
-npm run build
-```
-
-Runs `scripts/build.js` which builds all packages in topological order.
-
-### Libraries Only
-
-```bash
-npm run build:libs
-```
-
-Builds all library packages (`core`, `llms`, `page-controller`, `ui`, `memory`, `page-agent`) without the website or extension.
 
 ### Website
 
@@ -546,22 +530,12 @@ Or push to the connected branch — Vercel will deploy automatically via its Git
 
 ```
 packages/
-├── core/            @page-agent/core      — headless agent logic
-├── page-agent/      page-agent            — agent + UI entry point (npm package)
 ├── website/         @page-agent/website   — docs and landing page (React + Vite)
 ├── extension/       @page-agent/ext       — browser extension (WXT + React)
 ├── llms/            @page-agent/llms      — LLM client with tiered inference
-├── page-controller/ @page-agent/page-controller  — DOM operations
 ├── ui/              @page-agent/ui        — Panel and i18n
 ├── memory/          @page-agent/memory    — Hybrid Cognitive Memory Platform
 └── mcp/             @page-agent/mcp       — MCP server utilities
-
-scripts/
-├── build.js         — orchestrated full build
-├── build-libs.js    — library-only build
-├── sync-version.js  — sync version across all packages
-├── pre-publish.js   — promote publishConfig before npm publish
-└── post-publish.js  — restore dev config after publish
 ```
 
-Packages are listed in `workspaces` in topological order — `memory` depends on `llms`, the extension depends on `memory`, etc. The `build:libs` script respects this order.
+Packages are listed in `workspaces` in topological order — `memory` depends on `llms`, the extension depends on `memory`, etc.

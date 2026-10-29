@@ -4,24 +4,19 @@
 
 This is a **monorepo** with npm workspaces:
 
-- **Page Agent** (`packages/page-agent/`) - Main entry with built-in UI Panel, published as `page-agent` on npm
 - **Extension** (`packages/extension/`) - Browser extension (WXT + React)
 - **Website** (`packages/website/`) - React docs and landing page. **When working on website, follow `packages/website/AGENTS.md`**
 
 Internal packages:
 
-- **Core** (`packages/core/`) - PageAgentCore without UI (npm: `@page-agent/core`)
 - **LLMs** (`packages/llms/`) - LLM client with reflection-before-action mental model
-- **Page Controller** (`packages/page-controller/`) - DOM operations and visual feedback (SimulatorMask), independent of LLM
-- **UI** (`packages/ui/`) - Panel and i18n. Decoupled from PageAgent
-- **Memory** (`packages/memory/`) - Hybrid Cognitive Memory Platform (npm: `@page-agent/memory`). Local-first episodic memory, T0/T1 synthesis pipeline, knowledge graph, MCP vault integration, Nemilia agent archetypes. Architecture defined in `packages/extension/docs/designCognitiveBrain.md`. Zero cross-dependency with `packages/core/`.
+- **UI** (`packages/ui/`) - Panel and i18n
+- **Memory** (`packages/memory/`) - Hybrid Cognitive Memory Platform (npm: `@page-agent/memory`). Local-first episodic memory, T0/T1 synthesis pipeline, knowledge graph, MCP vault integration, Nemilia agent archetypes. Architecture defined in `packages/extension/docs/designCognitiveBrain.md`.
 
 ## Development Commands
 
 ```bash
 npm start                      # Start website dev server
-npm run build                  # Build all packages
-npm run build:libs             # Build all libraries
 npm run build:ext              # Build and zip the extension package
 npm run typecheck              # Typecheck all packages
 npm run test                   # Run unit tests across all workspaces
@@ -32,16 +27,13 @@ npm run lint                   # ESLint
 
 ### Monorepo Structure
 
-Source-first monorepo: library `package.json` exports point to `src/*.ts` during development. At publish time, `scripts/pre-publish.js` promotes `publishConfig` fields to top-level (swapping to `dist/`), and `scripts/post-publish.js` restores the originals.
+Source-first monorepo: library `package.json` exports point to `src/*.ts` during development.
 
 ```
 packages/
-├── core/                    # npm: "@page-agent/core" ⭐ Core agent logic (headless)
-├── page-agent/              # npm: "page-agent" entry class (with UI + controller + demo builds)
 ├── website/                 # @page-agent/website (private)
 ├── llms/                    # @page-agent/llms
 ├── extension/               # Browser extension
-├── page-controller/         # @page-agent/page-controller
 └── ui/                      # @page-agent/ui
 ```
 
@@ -49,52 +41,10 @@ packages/
 
 ### Module Boundaries
 
-- **Page Agent**: Main entry with UI. Extends PageAgentCore and adds Panel. Imports from `@page-agent/core`, `@page-agent/ui`
-- **Core**: PageAgentCore without UI. Imports from `@page-agent/llms`, `@page-agent/page-controller`
-- **LLMs**: LLM client with MacroToolInput contract. No dependency on page-agent
-- **UI**: Panel and i18n. Decoupled from PageAgent via PanelAgentAdapter interface
-- **Page Controller**: DOM operations with optional visual feedback (SimulatorMask). No LLM dependency. Enable mask via `enableMask: true` config
-
-### PageController ↔ PageAgent Communication
-
-All communication is async and isolated:
-
-```typescript
-// PageAgent delegates DOM operations to PageController
-await this.pageController.updateTree()
-await this.pageController.clickElement(index)
-await this.pageController.inputText(index, text)
-await this.pageController.scroll({ down: true, numPages: 1 })
-
-// PageController exposes state via async methods
-const simplifiedHTML = await this.pageController.getSimplifiedHTML()
-const pageInfo = await this.pageController.getPageInfo()
-```
-
-### DOM Pipeline
-
-1. **DOM Extraction**: Live DOM → `FlatDomTree` via `page-controller/src/dom/dom_tree/`
-2. **Dehydration**: DOM tree → simplified text for LLM
-3. **LLM Processing**: AI returns action plans (page-agent)
-4. **Indexed Operations**: PageAgent calls PageController by element index
+- **LLMs**: LLM client with MacroToolInput contract. Standalone; the extension uses it for Ask mode
+- **UI**: Panel and i18n
 
 ## Key Files Reference
-
-### Page Agent (`packages/page-agent/`)
-
-| File               | Description                                  |
-| ------------------ | -------------------------------------------- |
-| `src/PageAgent.ts` | ⭐ Main class with UI, extends PageAgentCore |
-| `src/demo.ts`      | IIFE demo entry (auto-init with demo API)    |
-
-### Core (`packages/core/`)
-
-| File                   | Description                             |
-| ---------------------- | --------------------------------------- |
-| `src/PageAgentCore.ts` | ⭐ Core agent class without UI          |
-| `src/tools/`           | Tool definitions calling PageController |
-| `src/config/`          | Configuration types and constants       |
-| `src/prompts/`         | System prompt templates                 |
 
 ### LLMs (`packages/llms/`)
 
@@ -114,26 +64,41 @@ const pageInfo = await this.pageController.getPageInfo()
 - Engines are cached and refcounted by model id in `BrowserLLMClient` (module-level `engineCache`) — loading a model is a multi-hundred-MB download/compile, and callers like `useScopedLLM` (`packages/extension/src/llm/useScopedLLM.ts`) create/dispose an `LLM` instance on every provider/model change. `dispose()` unloads the engine once the last referencing instance disposes, not on every call.
 - `@mlc-ai/web-llm` is an **optional peer dependency** of `@page-agent/llms`, dynamically imported only when `provider === 'browser'` is actually used — consumers that never select it don't need it installed.
 
-### Page Controller (`packages/page-controller/`)
-
-| File                        | Description                                                |
-| --------------------------- | ---------------------------------------------------------- |
-| `src/PageController.ts`     | ⭐ Main controller class with optional mask support        |
-| `src/SimulatorMask.ts`      | Visual overlay blocking user interaction during automation |
-| `src/actions.ts`            | Element interactions (click, input, scroll)                |
-| `src/dom/dom_tree/index.js` | Core DOM extraction engine                                 |
-
 ## Extension Architecture (`packages/extension/`)
+
+The extension is built with WXT + React. Entry point: `src/entrypoints/sidepanel/App.tsx`.
+
+### Two independent LLM provider settings — `apiProvider` vs. `textLLMProvider`
+
+`UnifiedSettings` (`src/shared/settings.ts`) carries **two separate provider selections** that
+must not be conflated:
+
+- `apiProvider` — the **navigation agent's** provider (multimodal: interprets page structure,
+  drives clicks/inputs). Set from the main Settings page.
+- `textLLMProvider` (+ `textLLMModel`/`textLLMEndpoint`) — an optional override for **text-only**
+  features that don't need multimodal/navigation capability: Executive Review Prep and any future
+  text-only skill. Set from the shared
+  `entrypoints/ai-provider-settings/main.tsx` page. When unset (`'use-global'`), these features
+  inherit `apiProvider`.
+
+Never resolve a text-only feature's LLM config from raw `settings.apiProvider` /
+`createLLMConfigFromProvider(settings)` directly — that ignores the override and reintroduces the
+bug where a provider configured for one text feature silently doesn't apply to another, even though
+both are "just text" features. Always go
+through `getTextLLMConfig(settings)` (`llm/providers/adapter.ts`) — directly, or via the
+`useScopedLLM` hook, which already wraps it and returns `LLM | null` (`null` = blocked, same
+demo-provider gate as the navigation agent). See `getTextLLMConfig`'s doc comment for the full
+decision table.
 
 The extension **is Folder Search**: on-device semantic search over a folder the user picks. There is no agent chat, no content script and no web-page access. Built with WXT + React; the side panel renders `FolderSearch` only (`src/entrypoints/sidepanel/App.tsx`).
 
-The other workspace packages (`core`, `page-controller`, `ui`, `page-agent`, `memory`, …) are separate libraries. The extension does **not** depend on them; only `@page-agent/llms` is used (for Ask mode).
+The other workspace packages (`ui`, `memory`, …) are separate libraries. The extension does **not** depend on them; only `@page-agent/llms` is used (for Ask mode).
 
 ### Source Map
 
 ```
 src/
-├── folder-search/                  # Everything Folder Search (see below)
+├── smart-search-extension/                  # Everything Folder Search (see below)
 ├── browser-ml/
 │   ├── gemma-embeddings.ts         # EmbeddingGemma 2 via transformers.js (offscreen only)
 │   └── offscreen-bridge.ts         # sendToOffscreen(): typed message passing with cold-start retry
@@ -169,7 +134,6 @@ The embedding model, ONNX Runtime and pdf.js load Workers/WASM that the manifest
 
 ### Folder Search (`src/folder-search/`) — local, read-only visual RAG
 
-
 Design: `packages/extension/docs/designLocalFolderSearch.md`. User picks a folder via the File System Access API (`mode: 'read'` only), it is indexed on-device with EmbeddingGemma 2 (text/vision/audio in one 768-d space, Matryoshka-truncated to `settings.dim`), and queried through one box. Nothing is uploaded; the only network traffic is the user-approved model download.
 
 - **Folder Search is the whole product.** No agent chat exists; do not add entry points for one. See design doc §14.6.
@@ -182,28 +146,13 @@ Design: `packages/extension/docs/designLocalFolderSearch.md`. User picks a folde
 - **Ask mode** is optional and resolves its LLM through `getTextLLMConfig()` / `useScopedLLM` (private providers only). Retrieval must keep working with no LLM configured.
 - `calibrate` priors in `ranking.ts` (`PRIOR_STATS`, `MIN_CALIBRATED`) are unmeasured starting points; tune them on a labeled sample before trusting thresholds.
 
-
-## Adding New Features
-
-### New Agent Tool
-
-1. Implement in `packages/core/src/tools/index.ts`
-2. If tool needs DOM ops, add method to PageController first
-3. Tool calls `this.pageController.methodName()` for DOM interactions
-
-### New PageController Action
-
-1. Add implementation in `packages/page-controller/src/actions.ts`
-2. Expose via async method in `PageController.ts`
-3. Export from `packages/page-controller/src/index.ts`
-
 ## Testing
 
 - **Test value**: Do not add redundant tests or directly translate implementation code into assertions. Test meaningful behavior and realistic failure modes.
 - **Framework**: Vitest for unit tests; Playwright E2E in `packages/e2e/` (loads the fake-embedder build from `packages/extension/.output/e2e/chrome-mv3-dev`; run `npm run test:build -w @page-agent/e2e` to rebuild and test; the package exposes `test:e2e`, not `test`, so root `npm test` and CI skip it)
 - **Location**: co-located, `src/foo.test.ts` next to `src/foo.ts`
 - **Coverage today**: `packages/llms` only — other packages will follow incrementally
-- **Adding tests to a new package**: create `vitest.config.ts` in the package and add a `"test": "vitest run"` script. Root `npm test` and `node scripts/ci.js` pick it up through npm workspaces.
+- **Adding tests to a new package**: create `vitest.config.ts` in the package and add a `"test": "vitest run"` script. Root `npm test` picks it up through npm workspaces.
 - **Live tests** (hit real external APIs, slow/costly): name them `*.live.test.ts`, exclude them from the package's `test` script, and expose them via a `test:live` script. Root `npm run test:live` runs all of them; they never run in `npm test` or CI. Template: `packages/llms`.
 - **Template**: See @page-agent/llms
 

@@ -110,9 +110,7 @@
     "author": "rahulsaipandit",
     "license": "MIT",
     "scripts": {
-        "build": "vite build",
-        "prepublishOnly": "node ../../scripts/pre-publish.js",
-        "postpublish": "node ../../scripts/post-publish.js"
+        "build": "vite build"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.16.0",

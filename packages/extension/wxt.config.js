@@ -89,7 +89,7 @@ export default defineConfig({
 		},
 	}),
 	zip: {
-		artifactTemplate: 'page-agent-ext-{{version}}-{{browser}}.zip',
+		artifactTemplate: 'smart-search-ext-{{version}}-{{browser}}.zip',
 	},
 	manifest: {
 		// The `key` field pins a stable extension ID for local/dev and self-hosted CRX builds.

@@ -79,7 +79,7 @@ export function ReviewPrompt() {
 				>
 					<X className="size-5" />
 				</button>
-				<img src="/assets/page-agent-64.png" alt="" className="mx-auto mb-3 size-14 rounded-xl" />
+				<img src="/assets/images/page-agent-64.png" alt="" className="mx-auto mb-3 size-14 rounded-xl" />
 				<h2 id="review-title" className="text-xl font-bold">
 					{t('review.title')}
 				</h2>

@@ -40,6 +40,10 @@ package.json.bak
 # Build artifacts in src
 packages/*/src/**/*.js
 !packages/*/src/**/*.d.ts
+# Hand-written source (ported from browser-use, see its file header), not a compiled
+# artifact - the blanket rule above silently dropped it from every clone but the one
+# that had it locally, breaking `wxt build` on page-controller's dom import.
+!packages/page-controller/src/dom/dom_tree/index.js
 
 # AI
 .agent

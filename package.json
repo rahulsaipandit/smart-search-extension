@@ -4,12 +4,9 @@
     "version": "1.12.4",
     "type": "module",
     "workspaces": [
-        "packages/page-controller",
         "packages/ui",
         "packages/llms",
-        "packages/core",
         "packages/memory",
-        "packages/page-agent",
         "packages/graph-viewer",
         "packages/mcp",
         "packages/extension",
@@ -32,21 +29,15 @@
     "scripts": {
         "start": "npm run dev --workspace=@page-agent/website",
         "dev:ext": "npm run dev -w @page-agent/ext",
-        "dev:demo": "npm run dev:demo --workspace=page-agent",
-        "build": "node scripts/build.js",
-        "build:libs": "node scripts/build-libs.js",
         "build:website": "npm run build:website --workspace=@page-agent/website",
         "build:ext": "npm run zip -w @page-agent/ext",
         "build:companion": "npm run tauri build --workspace=@page-agent/companion-app",
-        "version": "node scripts/sync-version.js",
-        "postpublish": "npm run postpublish --workspaces --if-present",
         "typecheck": "tsc --noEmit -p tsconfig.typecheck.json && tsc --noEmit -p packages/extension/tsconfig.json",
         "mac-typecheck": "tsc --noEmit -p tsconfig.typecheck.json && tsc --noEmit -p packages/extension/tsconfig.json",
         "win-typecheck": "tsc --noEmit -p tsconfig.typecheck.json ; tsc --noEmit -p packages/extension/tsconfig.json",
         "test": "npm test --workspaces --if-present",
         "test:live": "npm run test:live --workspaces --if-present",
         "lint": "eslint .",
-        "ci": "node scripts/ci.js",
         "cleanup": "rm -rf packages/*/dist && rm -rf packages/*/.output",
         "mac-cleanup": "rm -rf packages/*/dist && rm -rf packages/*/.output",
         "win-cleanup": "rm -rf packages/*/dist ; rm -rf packages/*/.output"
@@ -77,9 +68,9 @@
         "typescript": "^6.0.3",
         "typescript-eslint": "^8.69.0",
         "unplugin-dts": "^1.0.3",
-        "vite": "^8.2.2",
+        "vite": "^8.3.5",
         "vite-plugin-css-injected-by-js": "^5.0.2",
-        "vitest": "^4.1.11"
+        "vitest": "^5.0.5"
     },
     "overrides": {
         "typescript": "^6.0.3"

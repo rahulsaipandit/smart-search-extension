@@ -32,16 +32,17 @@ b64 = lambda i: "data:image/jpeg;base64," + base64.b64encode(T[i]).decode()
 LABEL = {"A": "A  fp32 text + fp32 image (ceiling)", "B": "B  fp32 text + int8-matmul image", "C": "C  int8-matmul text + int8-matmul image"}
 parts = ["""<!doctype html><meta charset=utf-8><title>S2 contact sheet (local only)</title>
 <style>body{font:14px system-ui;margin:16px;background:#111;color:#eee}h2{margin:20px 0 2px}h3{margin:6px 0 2px;font-size:12px;color:#9ab}
-.row{display:flex;gap:6px;flex-wrap:wrap}.c{position:relative}.c img{height:100px;display:block;border-radius:4px}
+.row{display:flex;gap:6px;flex-wrap:wrap}.c{position:relative}.c img{height:auto;max-height:192px;display:block;border-radius:4px;transition:transform .12s;transform-origin:top left}.c:hover{z-index:5}.c:hover img{transform:scale(2.2);box-shadow:0 6px 24px #000}
 .c label{position:absolute;left:3px;top:3px;background:#000b;padding:1px 4px;border-radius:3px;font-size:12px}
 button{padding:6px 12px;margin:8px 0}#sum{white-space:pre;font-family:monospace}</style>
 <h1>S2: does CLIP ViT-B/32 find your photos?</h1>
 <p>For each query, tick every photo that <b>clearly matches</b>. A photo that appears in several rows is one checkbox
 (ticking it anywhere ticks it everywhere). Queries with nothing relevant in your album should simply stay unticked.
 When done press the button; it shows precision@8 per configuration. <b>This page embeds thumbnails of your photos. Keep it local.</b></p>
-<button onclick="calc()">Compute precision@8</button><div id=sum></div>"""]
+<button onclick="calc()">Compute precision@8</button>
+<button onclick="setAll(null,true)">Tick everything</button><button onclick="setAll(null,false)">Clear everything</button><div id=sum></div>"""]
 for qi, q in enumerate(QUERIES):
-    parts.append(f"<h2>{html.escape(q)}</h2>")
+    parts.append(f"<h2>{html.escape(q)} <button onclick=\"setAll({qi},true)\">Tick all</button><button onclick=\"setAll({qi},false)\">Clear</button></h2>")
     for c in "ABC":
         parts.append(f"<h3>{LABEL[c]}</h3><div class=row>")
         for r, i in enumerate(tops[c][qi]):
@@ -50,6 +51,7 @@ for qi, q in enumerate(QUERIES):
 parts.append("""<script>
 const Q=%s, TOP=%s, K=%d;
 document.addEventListener('change',e=>{const t=e.target;if(t.dataset&&t.dataset.i)document.querySelectorAll('input[data-q="'+t.dataset.q+'"][data-i="'+t.dataset.i+'"]').forEach(x=>x.checked=t.checked)});
+function setAll(q,on){document.querySelectorAll(q===null?'input[type=checkbox]':'input[data-q="'+q+'"]').forEach(x=>x.checked=on)}
 function calc(){const tot={A:0,B:0,C:0};let s='query'.padEnd(20)+'A  B  C   (hits of 8)\\n';
 Q.forEach((q,qi)=>{const h={};for(const c of 'ABC'){const ids=TOP[c][qi];h[c]=ids.filter(i=>{const b=document.querySelector('input[data-q="'+qi+'"][data-i="'+i+'"]');return b&&b.checked}).length;tot[c]+=h[c]}
 s+=q.padEnd(20)+h.A+'  '+h.B+'  '+h.C+'\\n'});

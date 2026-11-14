@@ -456,12 +456,11 @@ files (261 ms/image, 201/55 ms/query) are therefore **not** what we would ship.
 modest overlap with fp32 can still be equally relevant. Relevance needs a human. A local contact sheet is at
 `D:\Temp\claude\1e874d58a8b54efe\a4a4dc9a-125a-43bb-89a9-fd3a8940a8b9\scratchpad\s2\out\contact_sheet2.html`
 (28 queries × three configurations A/B/C, tick the clear matches, press the button for precision@8 per config;
-it embeds thumbnails of the photos, so keep it local). **Status: awaiting the user's judgement.** Decision rule:
+it embeds thumbnails of the photos, so keep it local). **Status: judged 2026-11-14 (28 queries, top 8, human-ticked): precision@8 A=0.817, B=0.813, C=0.804. C is within 0.013 of the fp32 ceiling, so by the rule below configuration C (int8 text + int8 image) is chosen.** Caveats: 22 of 28 queries tie at 8/8/8 (the test is saturated); only selfie (8/7/6) and baby (2/2/1) differ; cat, fireworks, boat and swimming pool scored 0 everywhere, most likely because the album has none. Decision rule:
 choose the cheapest configuration whose precision@8 is within ~10% (absolute ~0.05–0.1) of the fp32 ceiling (A).
 
 **Updated recommendation.** CLIP ViT-B/32 (MIT) with a **self-requantised MatMul-only int8 image tower** is viable on
-the tablet. Text tower: fp32 (preferred, ~315 MB in the query phase only) or requantised, pending the human judgement
-above. Never ship the public `*_quantized.onnx` CLIP files. The tablet and any desktop builder must use the **same
+the tablet. Text tower: **requantised int8 (chosen after the S2 judgement above; ~200 MB in the query phase)**; fp32 text (~315 MB) is only a fallback if quality complaints appear. Never ship the public `*_quantized.onnx` CLIP files. The tablet and any desktop builder must use the **same
 requantised files** (record their hashes in `manifest.json`, §7.2) or vectors will not be comparable.
 
 ### 7.4 D4 — Face detection and recognition

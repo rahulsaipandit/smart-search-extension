@@ -510,6 +510,7 @@ class MainActivity : Activity() {
         val want = listenMode == 2 || (listenMode == 1 && System.currentTimeMillis() - lastFaceAt < 5000)
         if (want == voiceRunning) return
         voiceRunning = want
+        log("MIC ${if (want) "start" else "stop"} (mode=${arrayOf("off", "auto", "on")[listenMode]}, ms since face=${System.currentTimeMillis() - lastFaceAt})")
         voiceExec.execute {
             if (want) {
                 startVoice()

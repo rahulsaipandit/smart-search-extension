@@ -77,29 +77,29 @@ Refined from the original four, each with an identifier so options can be scored
 
 ### Functional
 
-| ID | Requirement |
-| --- | --- |
-| F1 | Search images **and videos** by keyword or phrase; multilingual desirable. |
+| ID | Requirement                                                                             |
+|----|-----------------------------------------------------------------------------------------|
+| F1 | Search images **and videos** by keyword or phrase; multilingual desirable.              |
 | F2 | Combine filters: person + concept ("Priya at the beach"). *(new; falls out of F1 + F4)* |
-| F3 | Detect faces in every library photo; store boxes and embeddings. |
-| F4 | Cluster/recognise faces and assign names. |
-| F5 | Live camera: detect a face, recognise an enrolled person, trigger their photo set. |
-| F6 | Voice: request photos, pause/resume, next/previous, name faces left→right, delete. |
-| F7 | Delete with an on-screen toast confirmation (and a voice confirmation path). |
-| F8 | Slideshow with transitions, dimming schedule, video playback. |
+| F3 | Detect faces in every library photo; store boxes and embeddings.                        |
+| F4 | Cluster/recognise faces and assign names.                                               |
+| F5 | Live camera: detect a face, recognise an enrolled person, trigger their photo set.      |
+| F6 | Voice: request photos, pause/resume, next/previous, name faces left→right, delete.      |
+| F7 | Delete with an on-screen toast confirmation (and a voice confirmation path).            |
+| F8 | Slideshow with transitions, dimming schedule, video playback.                           |
 
 ### Non-functional
 
-| ID | Requirement | Target (to be validated) |
-| --- | --- | --- |
-| N1 | Walk-up recognition latency | ≤ 2 s from face appearing to photos changing |
-| N2 | Voice command latency | ≤ 1.5 s from end of utterance to action |
-| N3 | Query latency | ≤ 1 s for text search on a 20k-photo library |
-| N4 | Library size | **~2,000 images** (confirmed 2026-11-13); design headroom for 10k |
-| N5 | Thermal / battery | Runs 12+ h/day powered with no throttling visible in the slideshow |
-| N6 | Offline | Fully functional with no internet after setup |
-| N7 | Privacy | No image, audio or face vector leaves the LAN |
-| N8 | Install | Sideloadable on Fire OS without Google Play services |
+| ID | Requirement                 | Target (to be validated)                                           |
+|----|-----------------------------|--------------------------------------------------------------------|
+| N1 | Walk-up recognition latency | ≤ 2 s from face appearing to photos changing                       |
+| N2 | Voice command latency       | ≤ 1.5 s from end of utterance to action                            |
+| N3 | Query latency               | ≤ 1 s for text search on a 20k-photo library                       |
+| N4 | Library size                | **~2,000 images** (confirmed 2026-11-13); design headroom for 10k  |
+| N5 | Thermal / battery           | Runs 12+ h/day powered with no throttling visible in the slideshow |
+| N6 | Offline                     | Fully functional with no internet after setup                      |
+| N7 | Privacy                     | No image, audio or face vector leaves the LAN                      |
+| N8 | Install                     | Sideloadable on Fire OS without Google Play services               |
 
 ## 4. What we already have
 
@@ -710,7 +710,7 @@ Gemma on a 2–5k sample) replaces S1/S5; S3 gains an overnight library-pass tim
 ## 10. Privacy, security and safety
 
 - **Local only:** no cloud calls for images, audio or faces (N7). Model downloads happen once, with
-  user consent, as in the extension. The bundle travels over USB/SD or the LAN.
+  user consent, as in the extension. **The app's one network use is that model download (2026-11-14): the internet permission is used for nothing else, and the request carries no personal data.** The bundle travels over USB/SD or the LAN.
 - **Biometric data:** face embeddings are biometric identifiers. Store them only on the frame/desktop,
   encrypt at rest where the platform allows, provide **"Delete all face data"**, and enrol only people
   who agreed (the household), never visitors.
@@ -877,6 +877,7 @@ enrolment is stored app-private and survives restarts. **Voice listening is OFF 
 | **Faces in videos** | A frame about every 2 s (up to 15, within the 30 s cap) through the same face step; repeats removed; videos join person albums and walk-up results. No naming from a playing video; a group seen only in videos is not listed on the People screen | A video cut from a photo of three people appeared for "Charlie and Alpha and Delta" and for Alpha |
 | **Free-form voice search** | Say "search for", then one phrase (about 9 s) with the same Vosk model in open-vocabulary mode; the heard text is shown and searched | Search path verified ("sunset over the mountains"); offline open-vocabulary test on synthetic speech: 8 of 10 phrases exact, 40 of 42 words; not tried with a real voice |
 | **Pin app to screen** (Settings) | Android's screen pinning; the same button unpins | Pinned (PINNED) and unpinned (NONE) |
+| **Model download** (first run, and Settings) | Search and voice models are not inside the app file (about 57 MB); a consent screen downloads them once (about 278 MB): the two CLIP files from `huggingface.co/GuideAxon/smart-photos-clip-b32-q8mm` and the Vosk voice model from its maker. Resumable, HTTPS only, SHA-256 checked and refused on a mismatch, keeps 300 MB free. Development uses `frame/dev-models/push-models.ps1` instead (see `MODELS.md`) | Consent screen shown on a tablet with the models removed; real download over Wi-Fi started from the screen; Pause kept the partial file; the app continued from the exact byte after a restart and an app update (see the result below for the full download and the fingerprint check) |
 | **New names: type or spell** | "New person" offers **Type it** or **Spell it out**. Spelling listens for single letters only (plus space, back, clear, done, cancel) and builds the name in an editable box, with a visible "Mic on" indicator; it works even while the microphone mode is OFF and hands the microphone back when it closes | Both dialogs open and Cancel returns the microphone; offline test with synthetic speech and the same grammar: 8 of 8 names; not tried with a real voice (look-alike letters such as B, D, P, T will cause errors, hence "back" and the editable box) |
 | **Pause sensing** | Saying "pause sensing" turns the camera and microphone off until **Resume sensing** is pressed on the touch controls. Separately, the microphone pauses itself after 60 s (a Settings value) with no recognised command; a touch wakes it, and in AUTO mode a face coming back wakes it. The camera keeps running during that silence pause so walk-up detection does not switch off for people who never speak | Both paths verified on the tablet (command, Resume button, silence timeout shortened to 15 s for the test); not tried with a real voice |
 
@@ -928,6 +929,44 @@ Defaults are privacy-friendly: camera and microphone are OFF until enabled in Se
 > https://huggingface.co/spaces/webml-community/embeddinggemma-2-webgpu
 >
 > This smart search extension already has functionality to *(sentence truncated in the original)*
+
+## Appendix A2: Why CLIP instead of EmbeddingGemma, and the model files
+
+The frame uses OpenAI CLIP (ViT-B/32), not EmbeddingGemma. The original brief named EmbeddingGemma as the example of the kind of model to use, but the measurements on the real tablet ruled it out.
+
+**Why Gemma doesn't fit this tablet** (measured over ADB on 2026-11-13, recorded in the design doc, sections 5.0 and 7.3.2):
+- **Memory.** The Fire HD 10 (9th gen) has 1.83 GB of RAM, with only about 0.7 GB free. Gemma's text encoder needs about 543 MB in the form that runs without a graphics chip, and its image encoder another 336 MB. The compressed versions need WebGPU.
+- **No WebGPU.** The tablet's browser is too old, and the app is native, so there is no GPU path for it.
+- **32-bit only.** That limits the memory a single app can use, which makes a large model even riskier.
+- **Same model for photos and queries.** The search vectors only match if the photos and your typed or spoken query are embedded by the same model. Gemma cannot run on the tablet, so it can't embed queries there. Using it only on a PC to index the photos would not work.
+
+**What CLIP gives instead:**
+- It runs on the tablet within the memory budget (about 150 to 200 MB at a time, with the image and text models never loaded together).
+- It is MIT-licensed.
+- On your album it scored 0.804 against 0.817 for the full-size version.
+
+**What we gave up:** Gemma handles several languages and can embed audio and video directly. CLIP search is English-only, and videos are searched through sampled frames, three per video, as built.
+
+If you later move to a more powerful device (more RAM and a GPU), switching is possible. The model sits behind its own file and the index records which model made it, so the app would rebuild the index. The first step would be re-checking the S2 quality test with Gemma on that device.
+
+The app loads three model files:
+
+| Model | What it does | Size | Where it comes from |
+| --- | --- | --- | --- |
+| **CLIP image model** (`clip_b32_vision_q8mm.onnx`) | Turns each photo or video frame into a "meaning" vector, so photos can be searched by scene | 96 MB | OpenAI CLIP ViT-B/32 (MIT licence), taken from the public `Xenova/clip-vit-base-patch32` ONNX files and re-compressed by this project |
+| **CLIP text model** (`clip_b32_text_q8mm.onnx`) | Turns what you type or say ("seaside") into the same kind of vector so it can be matched to the photos | 140 MB | The same CLIP source, re-compressed the same way |
+| **Vosk voice model** (`vosk-model-small-en-us-0.15`) | Offline speech recognition for the voice commands, spelling and "search for" | about 68 MB unzipped (41 MB zip) | Published by the Vosk project (Apache-2.0), downloadable from their site |
+
+Together that is about 278 MB to download (about 310 MB once the voice model is unzipped).
+
+The two CLIP files are this project's own builds. The "re-compressed" form is the S2 result: the public full-size CLIP files were shrunk the public full-size CLIP files with ONNX Runtime's quantisation, compressing only the matrix multiplications, one scale per channel. That kept search quality close to the full-size model (precision 0.804 against 0.817), where the public pre-compressed files lost too much. The scripts that make them are in `packages/smart-photos/tools/s2`.
+
+**Already inside the app, so no download is needed**
+- **YuNet** face detector (233 KB, MIT).
+- **SFace** face recogniser (38.7 MB, Apache-2.0).
+- The CLIP **tokenizer** (2.2 MB), which turns words into numbers for the text model.
+
+The three downloaded models are listed above; the face models and the tokenizer stay inside the app.
 
 ## Appendix B: Facts from the repo vs. assumptions
 

@@ -29,6 +29,8 @@ class Settings(ctx: Context) {
     /** When several known people are in view: true = only photos containing all of them (falls back to any). */
     /** The microphone pauses after this many seconds with no recognised command (a touch, or a face coming back in AUTO, wakes it). */
     var silenceSec: Int get() = int("silence", 60); set(v) { sp.edit().putInt("silence", v.coerceIn(15, 600)).apply() }
+    /** The user chose "Not now" on the first-run download screen: do not ask again at every start (Settings still offers it). */
+    var modelsDeclined: Boolean get() = bool("modelsDeclined", false); set(v) { sp.edit().putBoolean("modelsDeclined", v).apply() }
     var allOfThem: Boolean get() = bool("allOf", true); set(v) { sp.edit().putBoolean("allOf", v).apply() }
 
     /** True if [hour] (0..23) is inside the night window (which may wrap past midnight). */
@@ -50,6 +52,7 @@ class BootReceiver : BroadcastReceiver() {
 class SettingsScreen(
     private val act: Activity, private val s: Settings, private val onChanged: () -> Unit, private val onClose: () -> Unit,
     private val onImport: () -> Unit, private val onPin: () -> Unit,
+    private val onModels: () -> Unit, private val modelsStatus: () -> String,
 ) {
     private var screen: FrameLayout? = null
     private var host: FrameLayout? = null
@@ -101,6 +104,7 @@ class SettingsScreen(
         stepper("Night ends", "", s.nightEnd, ":00", 1) { s.nightEnd = it }
         toggle("Slow drift", "Moves the picture a little over time so a static photo cannot burn in", s.drift) { s.drift = it }
         toggle("Start when the tablet boots", "", s.bootStart) { s.bootStart = it }
+        row("Search and voice models", modelsStatus(), act.uiButton(if (modelsStatus().startsWith("Installed")) "Check" else "Download", 0xFF2563EB.toInt()) { onModels() })
         row("Add photos", "Copy photos and videos from a USB stick, SD card or any folder into the frame", act.uiButton("Choose folder", 0xFF2563EB.toInt()) { onImport() })
         row("Pin app to screen", "Keeps the frame on screen so it cannot be left by accident. To leave: hold Back and Overview together", act.uiButton("Pin / unpin") { onPin() })
     }

@@ -68,3 +68,7 @@ __pycache__/
 
 # Private device notes (serial number, local paths)
 packages/smart-photos/docs/KindleFireHD.md
+
+# Smart Photos: scratch folder for the development copies of the search and voice models (hundreds of MB, never commit)
+packages/smart-photos/frame/dev-models/*.onnx
+packages/smart-photos/frame/dev-models/vosk-model-small-en-us-0.15/

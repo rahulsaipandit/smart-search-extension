@@ -39,7 +39,9 @@ class MainActivity : Activity() {
 
     private lateinit var base: File
     private lateinit var store: PhotoStore
-    private var clip: ClipEngine? = null
+    @Volatile private var clip: ClipEngine? = null
+    private var clipTokenizer: ClipTokenizer? = null
+    private lateinit var modelsScreen: ModelsScreen
     @Volatile private var indexer: Indexer? = null
     private var voice: Voice? = null
     private var micWanted = false
@@ -124,7 +126,8 @@ class MainActivity : Activity() {
         ctl = PeopleController(this, ui, bg, store, faces, peopleStore, faceOverlay, { t, ms -> toast(t, ms) }, { peopleChanged() }, { name -> search(name) }, { title, done -> startSpelling(title, done) })
         ctl.onClose = { closePeople() }
         settings = Settings(this)
-        settingsScreen = SettingsScreen(this, settings, { settingsChanged() }, { closeSettings() }, { startImport() }, { togglePin() })
+        settingsScreen = SettingsScreen(this, settings, { settingsChanged() }, { closeSettings() }, { startImport() }, { togglePin() }, { openModels() }, { modelsStatus() })
+        modelsScreen = ModelsScreen(this, base, { onModelsInstalled() }, { declined -> closeModels(declined) })
         intervalMs = settings.intervalSec * 1000L; micMode = settings.micMode; frame.drift = settings.drift
         refreshMicBtn()
         immersive()
@@ -268,8 +271,10 @@ class MainActivity : Activity() {
         }
         val modelsDir = File(base, "models")
         if (debuggable && tok != null && intent.getBooleanExtra("equiv", false)) equivDump(tok, modelsDir)
+        clipTokenizer = tok
         if (tok != null) clip = ClipEngine(modelsDir, tok).takeIf { it.available }
         if (clip == null) log("search is off: CLIP models not found in $modelsDir")
+        if (Models.missing(base).isNotEmpty() && !settings.modelsDeclined) ui.post { openModels() }   // first run: ask, with the size, before downloading anything
         ui.post {
             if (store.count() == 0) {
                 centre.text = "No photos yet.\n\nCopy photos into\n${store.root.absolutePath}\nand reopen the app."
@@ -420,7 +425,7 @@ class MainActivity : Activity() {
         val (ps, rest) = ctl.parseQuery(q)
         if (ps.isNotEmpty()) { searchPeople(ps, rest); return }
         val c = clip
-        if (c == null) { toast("Search is not set up (models missing)"); return }
+        if (c == null) { toast("Search is not set up yet - open Settings and choose Download under Search and voice models", 6000); return }
         val done = store.indexedCount(); val total = store.count()
         toast("Searching for “$q”…", 8000)
         bg.execute {
@@ -599,6 +604,40 @@ class MainActivity : Activity() {
 
     private fun snoozeNight() { nightSnoozeUntil = System.currentTimeMillis() + 10 * 60_000L; exitNight() }
 
+    // ------------------------------------------------------------------ model download (first run and Settings)
+
+    private fun modelsStatus(): String {
+        val missing = Models.missing(base)
+        return if (missing.isEmpty()) "Installed. Photo search and voice commands are ready."
+        else "Not installed (${Models.remainingBytes(base, missing) / 1_000_000} MB to download, once, with your permission)."
+    }
+
+    private fun openModels(autoStart: Boolean = false) {
+        if (modelsScreen.isOpen) return
+        if (settingsScreen.isOpen) closeSettings()
+        resumeAfterPeople = state == State.AMBIENT || state == State.FILTERED
+        if (resumeAfterPeople) pause()
+        controls.visibility = View.GONE
+        modelsScreen.show(rootLayout, autoStart)
+    }
+
+    private fun closeModels(declined: Boolean) {
+        modelsScreen.hide()
+        if (declined) settings.modelsDeclined = true
+        if (resumeAfterPeople) { resumeAfterPeople = false; resume() }
+    }
+
+    /** The files are in place: start the search engine now (no restart needed), index the photos, and let voice load on first use. */
+    private fun onModelsInstalled() {
+        settings.modelsDeclined = false
+        bg.execute {
+            val t = clipTokenizer
+            if (t != null) clip = ClipEngine(Models.dir(base), t).takeIf { it.available }
+            log("MODELS installed; search ${if (clip != null) "ready" else "NOT ready"}")
+            startIndexing()
+        }
+    }
+
     // ------------------------------------------------------------------ indexing, importing, pinning
 
     /** Embeds every photo without a vector (resumable), then the face pass. Safe to call again: it does nothing while the indexer is running. */
@@ -764,6 +803,8 @@ class MainActivity : Activity() {
             val blank = IntArray(640 * 480) { 0xFF202020.toInt() }
             repeat(3) { pr.debugInject(blank, 640, 480); Thread.sleep(3000) }
         }.start() }, 5000)
+        if (intent.getBooleanExtra("models_badhash", false)) Models.debugBadHash = true
+        if (intent.getBooleanExtra("models_open", false)) ui.postDelayed({ openModels(autoStart = intent.getBooleanExtra("models_auto", false)) }, 2500)
         intent.getStringExtra("import_dir")?.let { dir -> ui.postDelayed({ runImport { Importer.fromDir(File(dir)) } }, 3000) }
         if (intent.getBooleanExtra("clearpeople", false)) { peopleStore.clear(); log("people cleared (faces kept)") }
         if (intent.getBooleanExtra("people", false)) ui.postDelayed({ openPeople() }, 2500)
@@ -855,7 +896,7 @@ class MainActivity : Activity() {
         bg.execute {
             val v = voice ?: run {
                 val dir = File(File(base, "models"), "vosk-model-small-en-us-0.15")
-                if (!dir.exists()) { ui.post { toast("Voice model missing - type the name instead", 5000); finishSpelling(false) }; return@execute }
+                if (!dir.exists()) { ui.post { toast("Voice model missing - type the name instead, or download it in Settings", 5000); finishSpelling(false) }; return@execute }
                 Voice(dir, voicePhrases()).also { voice = it }
             }
             v.stop(); v.setPhrases(SPELL_WORDS)
@@ -933,7 +974,7 @@ class MainActivity : Activity() {
             if (on) {
                 val v = voice ?: run {
                     val dir = File(File(base, "models"), "vosk-model-small-en-us-0.15")
-                    if (!dir.exists()) { ui.post { micWanted = false; refreshChip(); toast("Voice model missing") }; return@execute }
+                    if (!dir.exists()) { ui.post { micWanted = false; refreshChip(); toast("Voice model missing - open Settings and choose Download under Search and voice models", 6000) }; return@execute }
                     Voice(dir, voicePhrases()).also { voice = it }
                 }
                 v.start { text -> ui.post { onVoice(text) } }

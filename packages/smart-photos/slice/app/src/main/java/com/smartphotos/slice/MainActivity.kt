@@ -108,7 +108,7 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------ live UI (enrolment + recognition test)
 
     private fun styledButton(key: String, label: String, color: Int, onClick: () -> Unit): Button = Button(this).apply {
-        text = label; setTextColor(Color.WHITE); textSize = 24f; isAllCaps = true; typeface = android.graphics.Typeface.DEFAULT_BOLD
+        text = label; setTextColor(Color.WHITE); textSize = 20f; isAllCaps = true; typeface = android.graphics.Typeface.DEFAULT_BOLD
         setBackgroundColor(color); tag = color; setOnClickListener { onClick(); refreshButtons(engine.phase) }
     }.also { buttons[key] = it; btnBox!!.addView(it, LinearLayout.LayoutParams(0, 0, 1f)) }
 
@@ -120,9 +120,11 @@ class MainActivity : Activity() {
         stage.addView(box, FrameLayout.LayoutParams(10, 10))
         styledButton("start", "Start", 0xFF1FA85A.toInt()) { engine.start() }
         styledButton("cancel", "Cancel", 0xFF3B4650.toInt()) { engine.reset() }
+        styledButton("name", "Name me", 0xFF0E7490.toInt()) { showNameDialog() }
         styledButton("same", "That's me", 0xFF2563EB.toInt()) { engine.label = if (engine.label == "same") "none" else "same"; log("LABEL ${engine.label}") }
         styledButton("other", "Someone else", 0xFFE59A12.toInt()) { engine.label = if (engine.label == "other") "none" else "other"; log("LABEL ${engine.label}") }
         styledButton("redo", "Enroll again", 0xFF3B4650.toInt()) { log("RESET same=${engine.same.size} other=${engine.other.size}"); engine.reset() }
+        loadEnrollment()
         refreshButtons(Phase.LOADING)
         g.onLayoutRects = { _, br, horizontal ->
             box.orientation = if (horizontal) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
@@ -141,25 +143,55 @@ class MainActivity : Activity() {
         val show = when (phase) {
             Phase.READY -> listOf("start")
             Phase.COUNTDOWN, Phase.ENROLLING -> listOf("cancel")
-            Phase.MATCHING -> listOf("same", "other", "redo")
+            Phase.MATCHING -> listOf("name", "same", "other", "redo")
             else -> emptyList()
         }
         for ((k, b) in buttons) {
             b.visibility = if (k in show) View.VISIBLE else View.GONE
             val selected = (k == "same" && engine.label == "same") || (k == "other" && engine.label == "other")
             b.background = GradientDrawable().apply { setColor(b.tag as Int); cornerRadius = 24f; if (selected) setStroke(10, Color.WHITE) }
+            if (k == "name") b.text = engine.name?.let { "Name: $it (change)" } ?: "Name me"
             if (k == "same") b.text = if (selected) "✓ That's me" else "That's me"
             if (k == "other") b.text = if (selected) "✓ Someone else" else "Someone else"
         }
     }
 
+    private val enrollFile by lazy { File(filesDir, "enrollment.json") }   // app-private; holds face embeddings (biometric), never photos
+
+    @Synchronized private fun saveEnrollment() = runCatching {
+        val arr = org.json.JSONArray()
+        for (e in engine.exportEnrolled()) arr.put(org.json.JSONArray().also { a -> e.forEach { a.put(it.toDouble()) } })
+        // Write-then-rename so a crash mid-write can never leave a half-written (unreadable) enrolment.
+        val tmp = File(enrollFile.parentFile, "enrollment.json.tmp")
+        tmp.writeText(org.json.JSONObject().put("name", engine.name ?: org.json.JSONObject.NULL).put("embeddings", arr).toString())
+        if (!tmp.renameTo(enrollFile)) { enrollFile.delete(); tmp.renameTo(enrollFile) }
+        log("SAVED enrolment: ${arr.length()} embeddings, name=${engine.name}")
+    }.onFailure { log("save failed $it") }
+
+    private fun loadEnrollment() = runCatching {
+        if (!enrollFile.exists()) return@runCatching
+        val j = org.json.JSONObject(enrollFile.readText()); val arr = j.getJSONArray("embeddings")
+        val embs = List(arr.length()) { i -> val a = arr.getJSONArray(i); FloatArray(a.length()) { k -> a.getDouble(k).toFloat() } }
+            .filter { it.size == 128 }   // SFace dimension; anything else would index out of bounds when matching
+        engine.restore(embs, if (j.isNull("name")) null else j.getString("name"))
+        log("LOADED enrolment: ${embs.size} embeddings, name=${engine.name}")
+    }.onFailure { log("load failed $it") }
+
+    private fun showNameDialog() {
+        val et = android.widget.EditText(this).apply { setText(engine.name ?: ""); setSingleLine(); textSize = 28f; setPadding(40, 30, 40, 30) }
+        android.app.AlertDialog.Builder(this).setTitle("What should I call you?").setView(et)
+            .setPositiveButton("Save") { _, _ -> engine.rename(et.text.toString()); refreshButtons(engine.phase) }
+            .setNegativeButton("Cancel", null).show()
+    }
+
     private fun onEngineEvent(ev: String) {
         log("EVENT $ev")
+        if (ev == "done" || ev == "name") thread { saveEnrollment() }
         val t = tone ?: return
         runCatching {
             when (ev) {
                 "start", "go" -> t.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
-                "capture" -> t.startTone(ToneGenerator.TONE_PROP_ACK, 160)
+                "capture", "name" -> t.startTone(ToneGenerator.TONE_PROP_ACK, 160)
                 "done" -> t.startTone(ToneGenerator.TONE_PROP_PROMPT, 400)
                 "skip" -> t.startTone(ToneGenerator.TONE_PROP_NACK, 200)
             }
@@ -421,7 +453,9 @@ class MainActivity : Activity() {
         voice!!.startLive({ text, ms ->
             voiceFinals++; lastVoice = text
             log("VOICE '$text' (ms after last partial: $ms)")
-            guide?.let { it.voiceText = text.replace("[unk]", "").trim(); it.voiceCommand = it.voiceText.isNotEmpty(); if (!it.voiceCommand) it.voiceText = "?"; it.voiceAt = System.currentTimeMillis() }
+            guide?.onHeard(text)?.let { log("VOICE_MATCH '$it'") }
+            val m = Regex("this is ([a-z]+)").find(text)
+            if (m != null && engine.phase == Phase.MATCHING && engine.name == null && guide?.snap?.recognised == true) { engine.rename(m.groupValues[1].replaceFirstChar { it.uppercase() }); runOnUiThread { refreshButtons(engine.phase) } }
         }, { level -> guide?.micLevel = level })
     }
 

@@ -65,3 +65,6 @@ packages/extension/public/ort/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Private device notes (serial number, local paths)
+packages/smart-photos/docs/KindleFireHD.md

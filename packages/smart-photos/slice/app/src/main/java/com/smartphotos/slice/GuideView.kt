@@ -27,7 +27,21 @@ class GuideView(ctx: Context) : View(ctx) {
     private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     @Volatile var loadMsg = "Starting…"
     @Volatile var fatal: String? = null
-    @Volatile var voiceText = ""; @Volatile var voiceAt = 0L; @Volatile var voiceCommand = false
+    // Guided voice prompt: stays on one command until the recogniser hears exactly that phrase.
+    @Volatile var cmdIndex = 0
+    @Volatile private var matchedAt = 0L; @Volatile private var matchedCmd = ""
+    @Volatile private var wrongText = ""; @Volatile private var wrongAt = 0L
+
+    /** Called with each final recogniser result. Returns the command that was just completed, or null. */
+    @Synchronized fun onHeard(raw: String): String? {
+        val clean = raw.replace("[unk]", " ").trim().replace(Regex("[ ]+"), " ")
+        if (clean.isEmpty() || cmdIndex >= COMMANDS.size) return null
+        val target = COMMANDS[cmdIndex]
+        val now = System.currentTimeMillis()
+        if (" $clean ".contains(" $target ")) { matchedCmd = target; matchedAt = now; cmdIndex++; return target }
+        wrongText = clean; wrongAt = now
+        return null
+    }
     @Volatile var micLevel = 0.0
     @Volatile var stats: List<String> = emptyList()
     @Volatile var diag = ""
@@ -56,6 +70,11 @@ class GuideView(ctx: Context) : View(ctx) {
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD); color = WHITE }
     private val path = Path()
 
+    override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
+        if (e.action == android.view.MotionEvent.ACTION_DOWN && stripR.contains(e.x.toInt(), e.y.toInt())) { synchronized(this) { cmdIndex = (cmdIndex + 1).coerceAtMost(COMMANDS.size) }; return true }   // tap the strip to skip a command
+        return super.onTouchEvent(e)
+    }
+
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         landscape = w >= h
         u = min(w, h) / 1000f
@@ -70,7 +89,7 @@ class GuideView(ctx: Context) : View(ctx) {
             val left = gap; val top = banner + gap + (availH - ph) / 2
             prect.set(left, top, left + pw, top + ph)
             panel.set(prect.right + gap, banner + gap, w - gap, h - strip - gap)
-            btnRect.set(panel.left, panel.bottom - (3 * btnH + 2 * gap), panel.right, panel.bottom)
+            btnRect.set(panel.left, panel.bottom - (4 * btnH + 3 * gap), panel.right, panel.bottom)
         } else {
             var ph = min((0.50f * h).toInt(), w * 4 / 3); var pw = ph * 3 / 4
             if (pw > w - 2 * gap) { pw = w - 2 * gap; ph = pw * 4 / 3 }
@@ -157,7 +176,8 @@ class GuideView(ctx: Context) : View(ctx) {
             Phase.DONE -> Banner(GREEN, "Face enrolled", "${s.captured} of 5 angles captured", Icon.CHECK)
             Phase.MATCHING -> when {
                 s.issue != Issue.NONE -> if (s.issue == Issue.NO_FACE) Banner(GREY, "Waiting for a face", "Step in front of the camera", Icon.FACE) else ib
-                s.recognised -> Banner(GREEN, "Recognised: you", "score %.2f (needs %.2f)".format(s.cos, EnrollEngine.MATCH_THRESHOLD), Icon.CHECK)
+                s.recognised && s.name != null -> Banner(GREEN, "Hello, ${s.name}!", "Face recognized  -  score %.2f".format(s.cos), Icon.CHECK)
+                s.recognised -> Banner(GREEN, "Face recognized", "What do I call you?  Tap NAME, or say \"this is …\"", Icon.CHECK)
                 !s.cos.isNaN() -> Banner(RED, "Unknown person", "score %.2f (needs %.2f)".format(s.cos, EnrollEngine.MATCH_THRESHOLD), Icon.CROSS)
                 else -> Banner(GREY, "Checking…", "", Icon.FACE)
             }
@@ -232,6 +252,15 @@ class GuideView(ctx: Context) : View(ctx) {
             for ((px, dx) in listOf(x1 to 1f, x2 to -1f)) for ((py, dy) in listOf(y1 to 1f, y2 to -1f)) {
                 c.drawLine(px, py, px + dx * l, py, line); c.drawLine(px, py, px, py + dy * l, line)
             }
+            if (s.phase == Phase.MATCHING && s.recognised) {
+                val msg = s.name ?: "What do I call you?"
+                text.textSize = ph * 0.045f; val tw = text.measureText(msg) + ph * 0.05f; val th = ph * 0.075f
+                val px = ((x1 + x2) / 2).coerceIn(prect.left + tw / 2 + 4f, prect.right - tw / 2 - 4f)
+                val py = (y1 - th * 0.8f).coerceAtLeast(prect.top + ph * 0.14f)
+                fill.color = if (s.name != null) GREEN else AMBER
+                c.drawRoundRect(RectF(px - tw / 2, py - th / 2, px + tw / 2, py + th / 2), th / 2, th / 2, fill)
+                text.color = WHITE; text.textAlign = Paint.Align.CENTER; c.drawText(msg, px, py + text.textSize * 0.35f, text); text.textAlign = Paint.Align.LEFT
+            }
             fill.color = WHITE
             for (i in 0 until 5) c.drawCircle(mx(s, face.lm[2 * i]), my(s, face.lm[2 * i + 1]), 5f * u, fill)
             if (s.phase == Phase.ENROLLING && s.hold > 0 && s.issue == Issue.NONE) {
@@ -279,8 +308,14 @@ class GuideView(ctx: Context) : View(ctx) {
     /** Big status pill over the top of the picture: Waiting for face -> Face detected -> Face detection complete. */
     private fun drawStage(c: Canvas, s: Snapshot?, now: Long, stale: Boolean) {
         val st = stageOf(s, stale)
-        val label = when (st) { 0 -> "Waiting for face…"; 1 -> "Face detected"; else -> "Face detection complete" }
-        val col = when (st) { 0 -> AMBER; 1 -> BLUE; else -> GREEN }
+        val match = s != null && s.phase == Phase.MATCHING && st == 2
+        val label = when {
+            st == 0 -> "Waiting for face…"; st == 1 -> "Face detected"
+            match && s!!.recognised -> if (s.name != null) "Recognized: ${s.name}" else "Face recognized"
+            match -> "Unknown person"
+            else -> "Face detection complete"
+        }
+        val col = if (match && !s!!.recognised) RED else when (st) { 0 -> AMBER; 1 -> BLUE; else -> GREEN }
         val ph = prect.height().toFloat(); val pw = prect.width().toFloat()
         val g = 0.02f * pw
         val r = RectF(prect.left + g, prect.top + g, prect.right - g, prect.top + g + 0.085f * ph)
@@ -341,12 +376,12 @@ class GuideView(ctx: Context) : View(ctx) {
         text.color = DIM; text.textSize = 30f * u; c.drawText(if (phase == Phase.MATCHING) "RECOGNITION TEST" else "ENROLLMENT STEPS", content.left.toFloat(), content.top + 34f * u, text)
         val top = content.top + 60f * u
         if (phase == Phase.MATCHING) {
-            var y = top + 40f * u
+            var y = top + 30f * u
             text.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-            for (l in stats) { fit(text, l, 34f * u, content.width().toFloat()); text.color = WHITE; c.drawText(l, content.left.toFloat(), y, text); y += text.textSize * 1.55f }
+            for (l in stats) { fit(text, l, 28f * u, content.width().toFloat()); text.color = WHITE; c.drawText(l, content.left.toFloat(), y, text); y += text.textSize * 1.4f }
             text.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             val rec = when (label) { "same" -> "● Recording: ME" to GREEN; "other" -> "● Recording: SOMEONE ELSE" to AMBER; else -> "○ Not recording - tap a button below" to DIM }
-            y += 10f * u; text.color = rec.second; fit(text, rec.first, 38f * u, content.width().toFloat()); c.drawText(rec.first, content.left.toFloat(), y, text)
+            y += 4f * u; text.color = rec.second; fit(text, rec.first, 32f * u, content.width().toFloat()); c.drawText(rec.first, content.left.toFloat(), y, text)
         } else {
             val steps = s?.steps?.takeIf { it.isNotEmpty() } ?: List(5) { StepState.PENDING }
             val poses = Pose.values()
@@ -380,14 +415,23 @@ class GuideView(ctx: Context) : View(ctx) {
         fill.color = STRIP; c.drawRect(stripR, fill)
         val h = stripR.height().toFloat(); val cy = stripR.exactCenterY()
         smoothMic = (smoothMic * 0.7f + (min(1.0, ln(1.0 + micLevel) / ln(6000.0))).toFloat() * 0.3f)
-        val heard = now - voiceAt < 4000 && voiceText.isNotEmpty()
-        fill.color = if (heard && voiceCommand) GREEN else GREY; c.drawCircle(h * 0.8f, cy, h * 0.28f, fill)
+        val done = cmdIndex >= COMMANDS.size
+        val justMatched = now - matchedAt < 1400
+        val justWrong = !justMatched && now - wrongAt < 3500 && wrongText.isNotEmpty()
+        val good = justMatched || done
+        fill.color = if (good) GREEN else if (justWrong) AMBER else GREY; c.drawCircle(h * 0.8f, cy, h * 0.28f, fill)
         fill.color = WHITE; c.drawRoundRect(RectF(h * 0.7f, cy - h * 0.14f, h * 0.9f, cy + h * 0.02f), h * 0.1f, h * 0.1f, fill); c.drawRect(h * 0.77f, cy + h * 0.02f, h * 0.83f, cy + h * 0.17f, fill)
-        val bx = h * 1.4f; val bw = min(width * 0.18f, 300f * u)
+        val bx = h * 1.4f; val bw = min(width * 0.16f, 260f * u)
         fill.color = GREY; c.drawRoundRect(RectF(bx, cy - h * 0.1f, bx + bw, cy + h * 0.1f), h * 0.1f, h * 0.1f, fill)
         fill.color = if (smoothMic > 0.85f) AMBER else GREEN; c.drawRoundRect(RectF(bx, cy - h * 0.1f, bx + bw * smoothMic, cy + h * 0.1f), h * 0.1f, h * 0.1f, fill)
-        val msg = if (!heard) "Listening - say \"${COMMANDS[((now / 4000) % COMMANDS.size).toInt()]}\"" else if (voiceCommand) "Heard: \"$voiceText\"" else "Not a command - ignored"
-        text.color = if (heard && voiceCommand) 0xFF7DFFB0.toInt() else if (heard) DIM else WHITE
+        val target = if (done) "" else COMMANDS[cmdIndex]
+        val msg = when {
+            justMatched -> "✓ Heard \"$matchedCmd\""
+            done -> "✓ All ${COMMANDS.size} commands heard"
+            justWrong -> "Heard \"$wrongText\" - please say \"$target\""
+            else -> "Listening - say \"$target\"  (${cmdIndex + 1}/${COMMANDS.size})"
+        }
+        text.color = if (good) 0xFF7DFFB0.toInt() else if (justWrong) 0xFFFFC857.toInt() else WHITE
         fit(text, msg, h * 0.5f, width - (bx + bw + h) - h * 0.4f)
         c.drawText(msg, bx + bw + h * 0.6f, cy + text.textSize * 0.35f, text)
         text.color = WHITE

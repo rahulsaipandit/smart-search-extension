@@ -44,6 +44,7 @@ class Snapshot(
     val cos: Float = Float.NaN,
     val recognised: Boolean = false,
     val captured: Int = 0,
+    val name: String? = null,
 )
 
 /**
@@ -64,6 +65,8 @@ class EnrollEngine(private val onEvent: (String) -> Unit) {
     var phase = Phase.LOADING; private set
     val enrolled = ArrayList<FloatArray>()
     val same = ArrayList<Float>(); val other = ArrayList<Float>()
+    @Volatile var name: String? = null
+    private var restored = false
     @Volatile var label = "none"   // none | same | other  (which group a live match sample is recorded into)
 
     private val steps = Array(POSES.size) { StepState.PENDING }
@@ -81,6 +84,17 @@ class EnrollEngine(private val onEvent: (String) -> Unit) {
         phase = Phase.COUNTDOWN; phaseStart = System.currentTimeMillis(); onEvent("start")
     }
 
+    /** Loads a previously saved enrolment: the next frame goes straight to recognition. */
+    @Synchronized fun restore(embs: List<FloatArray>, savedName: String?) {
+        if (embs.isEmpty()) return
+        enrolled.clear(); enrolled.addAll(embs); name = savedName; restored = true
+        steps.fill(StepState.DONE)
+    }
+
+    @Synchronized fun exportEnrolled(): List<FloatArray> = enrolled.map { it.copyOf() }
+
+    fun rename(n: String?) { name = n?.trim()?.takeIf { it.isNotEmpty() }; onEvent("name") }
+
     /** Back to the ready screen; keeps nothing. */
     @Synchronized fun reset() {
         enrolled.clear(); acc.clear(); steps.fill(StepState.PENDING); cur = 0; holdTicks = 0
@@ -90,7 +104,7 @@ class EnrollEngine(private val onEvent: (String) -> Unit) {
 
     @Synchronized fun statsLines(): List<String> {
         fun f(l: List<Float>, mx: Boolean) = if (l.isEmpty()) "n=0" else "n=%d  mean %.2f  %s %.2f".format(l.size, l.average(), if (mx) "max" else "min", if (mx) l.max() else l.min())
-        return listOf("Poses captured: ${enrolled.size} of ${POSES.size}", "Me:      ${f(same, false)}", "Others:  ${f(other, true)}", "Same person if score >= %.2f".format(MATCH_THRESHOLD))
+        return listOf("Name: ${name ?: "(not set)"}", "Poses captured: ${enrolled.size} of ${POSES.size}", "Me:      ${f(same, false)}", "Others:  ${f(other, true)}", "Same person if score >= %.2f".format(MATCH_THRESHOLD))
     }
 
     /** Head pose from the 5 landmarks: (yaw in mirror terms, nose-position ratio between eyes and mouth). */
@@ -121,7 +135,7 @@ class EnrollEngine(private val onEvent: (String) -> Unit) {
 
     @Synchronized fun onFrame(faces: List<Face>, w: Int, h: Int, luma: Float, emb: FloatArray?): Snapshot {
         val now = System.currentTimeMillis()
-        if (phase == Phase.LOADING) { phase = Phase.READY; phaseStart = now }
+        if (phase == Phase.LOADING) { phase = if (restored && enrolled.isNotEmpty()) Phase.MATCHING else Phase.READY; phaseStart = now }
         val face = faces.maxByOrNull { it.w }
         var issue = quality(faces, face, w, h, luma)
         if (phase == Phase.MATCHING && issue.name.startsWith("MOVE")) issue = Issue.NONE
@@ -161,7 +175,7 @@ class EnrollEngine(private val onEvent: (String) -> Unit) {
         val pose = if (phase == Phase.ENROLLING) POSES[cur.coerceAtMost(POSES.size - 1)] else null
         return Snapshot(
             phase, issue, pose, steps.toList(), face, w, h, yaw, pitch, ok, far, holdTicks, HOLD_TICKS, phaseStart, now,
-            capturedAt, skippedAt, cos, rec, enrolled.size,
+            capturedAt, skippedAt, cos, rec, enrolled.size, name,
         )
     }
 

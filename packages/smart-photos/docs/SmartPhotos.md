@@ -170,8 +170,42 @@ The target is a **Fire HD 10 (9th gen, 2019), `KFMAWI`**, older and tighter than
   Android (Kotlin/KMP) with ONNX Runtime or LiteRT, 32-bit build, is now the strongest candidate.**
   Chrome 119 as a kiosk browser is a possible stopgap for prototyping only.
 
-Remaining unknowns (camera resolution, mic quality, Web API support in Chrome 119, ONNX Runtime
-`armeabi-v7a` speed) are for S0.
+### 5.0.1 S0 probe results (2026-11-13, native app on the tablet)
+
+Source: [`../s0-probe/`](../s0-probe/) (Kotlin, `armeabi-v7a` only, ONNX Runtime 1.31.1). Run on USB
+power from the PC, room-temperature, ~1 minute total. Camera frames and audio were analysed in memory
+and discarded; only a text report was written. Re-run: build with `./gradlew assembleDebug`, install, read
+`adb logcat -s S0:I`.
+
+| Area | Result | Meaning for the design |
+| --- | --- | --- |
+| Process | 32-bit (`is64bitProcess=false`); Java heap limit 384 MB (512 MB with `largeHeap`); 861 MB available at start | Native memory (ONNX Runtime) is outside the Java heap, but the overall ~0.7–0.8 GB free budget stands. |
+| **ONNX Runtime on 32-bit** | **Loads and runs** (CPU, XNNPACK and NNAPI providers present) | The central "does a native runtime even exist for this device" risk is closed. |
+| CPU speed, vision-encoder proxy (0.4 GFLOP conv net, 224×224) | 1 thread 54 ms, 2 threads 35 ms, **4 threads 21 ms**, 8 threads 19 ms | ≈20 GFLOP/s effective on 4 threads. Use **4 threads**; 8 adds little. A real mobile image encoder of ~1–4 GFLOP should take roughly **0.05–0.2 s/image**, i.e. **~2–7 min for 2,000 images** (linear estimate, **not measured with a real model**). |
+| Text-encoder proxy (0.27 GFLOP matmul, 64×512) | 1 thread 32 ms, **4 threads 9 ms** | A small text tower is interactive (well under N3's 1 s). |
+| XNNPACK vs plain CPU vs NNAPI | XNNPACK 21 ms ≈ CPU 21 ms; **NNAPI 29 ms (slower)** | No accelerator gain: use the plain CPU provider (optionally XNNPACK); skip NNAPI. |
+| Memory in use while benchmarking | PSS ~105–130 MB with ~2–8 MB models; native heap 17–24 MB | Runtime overhead is ~90 MB before the model; the **150–250 MB resident budget** for model + runtime is realistic only for models of roughly ≤ 60–100 MB. |
+| Front camera, live capture (Camera2, 4 s each) | 1600×1200: **15 fps**, first frame 1.2 s; 1280×720: 14 fps, 0.4 s; 640×480: 14 fps | Frame rate is capped at ~15 fps regardless of size, ample for 1–2 Hz detection. Full-resolution frames are available natively (not via `getUserMedia`). |
+| Front camera optics | Focal length 2.01 mm; **fixed focus** (AF mode off only, min focus distance 0); exposure 0.1 ms–400 ms; ISO 100–6400; AE ranges 5–30 fps; mean luma 116–128/255 in a normal lit room | No autofocus: faces are sharp only within the lens's fixed focal range. **Low-light capability is real** (long exposure, high ISO) but costs fps and noise; still to test in dim light with real faces (S3). |
+| Microphone | Opens at 16/44.1/48 kHz; ambient floor **−60.8 dBFS RMS** (quiet room), peak −42.6 dBFS | Quiet-room noise is low. Speech-at-distance accuracy is unmeasured (S4). |
+| **System speech recogniser** | `SpeechRecognizer.isRecognitionAvailable=false`, **no recognition service installed**, even with sideloaded Play Services | Android/Google speech is **not an option**: voice needs an **offline engine we ship** (32-bit build). D5-E is dead; D5-A (Web Speech) is unavailable too. |
+| WebView | Provider is **Amazon WebView 75** (Chromium 75) | A Tauri/WebView app would run on Chromium 75: no WASM SIMD (needs 91), no modern APIs. **Tauri is effectively ruled out** for ML work; UI-only use remains possible. |
+| Thermal | Battery temperature unchanged (21.0 °C) after the short run | Sustained load is **not yet tested** (S6); this run was too short to say anything. |
+
+**Decisions this settles**
+
+1. **Native Android (Kotlin/KMP) is confirmed** as the runtime; Tauri and Silk are out for the main app.
+2. **ONNX Runtime (CPU, 4 threads) is the inference engine**; no accelerator is worth the complexity.
+3. **A small joint image–text model** is feasible for index and queries; indexing 2,000 images is minutes,
+   not hours, so desktop-built indexes are an optional convenience only.
+4. **Offline speech is mandatory** and must ship `armeabi-v7a` binaries. A closed-grammar recogniser
+   (Vosk-class) for commands is the first thing to prototype (S4).
+5. Face detection runs on 1600×1200 frames at ~1–2 Hz; fixed focus and the ~2 MP sensor make recognition range the
+   main risk (S3).
+
+Still unmeasured: a **real** image/text model's latency and RAM, real-face recognition accuracy at 1–2 m and in
+dim light, speech accuracy at distance, sustained thermal behaviour, and 32-bit builds of candidate speech and
+face libraries.
 
 ### 5.1 Expected (general knowledge, superseded where measured above)
 
@@ -349,6 +383,87 @@ build that interface in the frame's own package and share it, rather than changi
 extension. If the winner is a small model, the desktop does not need a GPU at all (2,000 images
 index in minutes on CPU).
 
+#### 7.3.2 S1' results: real models on the tablet (2026-11-13)
+
+Method: the S0 app's model mode (`--es mode models`) loads each ONNX file with ONNX Runtime 1.31.1 (CPU,
+`armeabi-v7a`), batch 1, dummy inputs (224×224 images, 77-token text), 12 runs, median of the last 10.
+Latency is the median at **4 threads**. Memory is process PSS after loading (indicative: PSS readings between
+back-to-back models carry over, so treat them as ±30 MB). Quality is **not** measured here (that is S2).
+Model files are the Hugging Face ONNX exports `Xenova/clip-vit-base-patch32` and `Xenova/mobileclip_s0`.
+
+| Model (encoder, precision, file size) | Licence | Latency (4 thr) | Resident after load | Verdict |
+| --- | --- | --- | --- | --- |
+| **OpenAI CLIP ViT-B/32 vision, int8, 89 MB** | **MIT** | **261 ms/image** | ~150 MB | **Fits.** 2,000 images ≈ 9 min of inference. |
+| **OpenAI CLIP ViT-B/32 text, int8, 65 MB** | **MIT** | **201 ms/query** (2 thr: 328 ms) | ~130–145 MB | **Fits.** Interactive; load ~1 s. |
+| CLIP ViT-B/32 vision, fp32, 352 MB | MIT | 430 ms/image | ~415 MB | Too much RAM for no gain. |
+| CLIP ViT-B/32 vision, fp16, 176 MB | MIT | 447 ms/image | ~425 MB (expanded to fp32 at load) | No benefit from fp16 on this CPU. |
+| MobileCLIP-S0 vision, fp32, 45 MB | Apple AMLR (research) | 410 ms/image (256 px) | ~100–150 MB | Slower than CLIP B/32 int8 here, licence-restricted. |
+| MobileCLIP-S0 vision, int8, 12 MB | Apple AMLR (research) | 658 ms/image (256 px) | ~85 MB | int8 is *slower* than its fp32 build on this CPU. |
+| MobileCLIP-S0 text, int8, 43 MB | Apple AMLR (research) | 101 ms/query | ~105–150 MB | Faster text, but not selectable (licence). |
+
+What this tells us:
+
+- **A real, MIT-licensed model already meets the targets on this tablet.** CLIP ViT-B/32 int8 gives 0.26 s/image
+  and 0.2 s/query inside the 150–250 MB budget, so the "small model" does not have to be exotic.
+- **Phased memory:** index time needs only the vision encoder (~150 MB); query time needs only the text encoder
+  (~140 MB) plus the vectors (~1 MB for 2,000 × 512 fp16). The two are never resident together, so the RAM
+  budget is per phase, not combined.
+- **FLOPs do not predict speed here.** MobileCLIP-S0 (fewer FLOPs, built for phones) is slower than ViT-B/32 on
+  this 32-bit CPU, and int8 convolutions are slower than fp32 while int8 matmul-heavy transformers are faster.
+  Always benchmark on the device.
+- **Use 4 threads** (2 threads is ~1.5× slower; 8 was no better in S0).
+- **Gemma and MobileCLIP drop out:** Gemma for memory (§5.0), MobileCLIP for licence and speed. Both stay
+  available only as research references.
+
+**Leading candidate: OpenAI CLIP ViT-B/32, int8 (MIT).** Known costs to check in S2: English-only text, no native
+video/audio (videos via sampled frames), and quantisation loss versus fp32 (compare on the desktop). Not yet
+tried: TinyCLIP (MIT, needs our own ONNX export, smaller but weaker), SigLIP-base (Apache-2.0, ~4× the image
+tokens so likely >1 s/image), and an fp32 *text* tower. Still to build: the CLIP BPE tokenizer and image
+preprocessing in Kotlin, and the desktop/tablet equivalence test from §7.3.1.
+
+#### 7.3.3 S2 results: quantisation and retrieval on the user's 2025 album (2026-11-13)
+
+Data: 1,427 JPEGs from `scripts/Photos/2025` (4.1 GB). Scripts: [`../tools/s2/`](../tools/s2/). Everything ran
+locally; the photos were only read, no image was viewed by the assistant or uploaded. The album folder was added to
+`.git/info/exclude` (local, uncommitted) because it was not git-ignored. 40 generic queries ("seaside", "birthday
+cake", "dog", …) with the prompt template `a photo of {query}` (raw queries overlap only ~66% with templated ones, so
+**the tablet must use the template**). "Overlap@10" = share of the fp32 top-10 that a configuration also returns;
+it measures *fidelity to fp32*, **not relevance** (see the human-judgement step below).
+
+**Finding 1: the public int8 files are too lossy.** The Hugging Face `*_quantized.onnx` CLIP files quantise
+everything, including the patch-embedding convolution. Against fp32: image-vector cosine mean **0.92**, worst
+**0.73**; text cosine mean **0.94**; top-10 overlap only **0.45** ("seaside" 0%). The S1' speed numbers for those
+files (261 ms/image, 201/55 ms/query) are therefore **not** what we would ship.
+
+**Finding 2: quantising only the MatMuls, per channel, recovers most of it.** Re-quantising the fp32 tower
+(`quantize_dynamic`, `QInt8`, `op_types_to_quantize=["MatMul"]`, `per_channel=True`):
+
+| Configuration | Image cos vs fp32 (mean / min) | Top-10 overlap vs fp32 | Tablet latency (4 thr) | Resident (indicative) |
+| --- | --- | --- | --- | --- |
+| Public int8 image + public int8 text (S1') | 0.92 / 0.73 | 0.45 | 261 ms img / 55 ms query | ~150 MB |
+| **Requantised image (96 MB) + fp32 text (254 MB)** | **0.990 / 0.94** | **0.76** | **315 ms img / 58 ms query** | ~175–190 MB (index phase) / **~315 MB (query phase)** |
+| Requantised image + requantised text (141 MB) | 0.990 / 0.94 (text cos 0.945) | 0.57 | 315 ms img / 54 ms query | ~175–190 MB / ~200 MB |
+| fp32 image + fp32 text (reference) | 1.0 | 1.0 | 430 ms img | ~415 MB image alone |
+
+- With **realistic 16-token queries** the fp32 text encoder takes **58 ms** (4 threads; the earlier 201 ms used a 77-token
+  pad), so text precision is nearly free in time; its cost is **memory (~315 MB in the query phase)**.
+- **The text tower is the quantisation-sensitive part** (cos 0.945 even with MatMul-only per-channel). Keep it fp32 if RAM
+  allows, otherwise use the requantised text tower (~200 MB) and accept ~0.57 overlap, or precompute common query
+  vectors on the desktop with fp32 (vocabulary option D3-C) and use the quantised tower only for unseen phrases.
+- Indexing 2,000 images with the requantised image encoder ≈ 315 ms × 2,000 ≈ **10.5 min** plus decode/resize.
+
+**What the overlap numbers do and do not say.** In a 1,427-photo album many photos are near-ties for a query, so
+modest overlap with fp32 can still be equally relevant. Relevance needs a human. A local contact sheet is at
+`D:\Temp\claude\1e874d58a8b54efe\a4a4dc9a-125a-43bb-89a9-fd3a8940a8b9\scratchpad\s2\out\contact_sheet2.html`
+(28 queries × three configurations A/B/C, tick the clear matches, press the button for precision@8 per config;
+it embeds thumbnails of the photos, so keep it local). **Status: awaiting the user's judgement.** Decision rule:
+choose the cheapest configuration whose precision@8 is within ~10% (absolute ~0.05–0.1) of the fp32 ceiling (A).
+
+**Updated recommendation.** CLIP ViT-B/32 (MIT) with a **self-requantised MatMul-only int8 image tower** is viable on
+the tablet. Text tower: fp32 (preferred, ~315 MB in the query phase only) or requantised, pending the human judgement
+above. Never ship the public `*_quantized.onnx` CLIP files. The tablet and any desktop builder must use the **same
+requantised files** (record their hashes in `manifest.json`, §7.2) or vectors will not be comparable.
+
 ### 7.4 D4 — Face detection and recognition
 
 Two jobs with different costs: (i) **library faces** (batch, offline) and (ii) **live camera**
@@ -386,7 +501,7 @@ from the user's own photos plus tablet-camera captures (spike S3), then lock one
 | **B. On-device Whisper (tiny/base) via transformers.js or whisper.cpp** | Open-source offline STT. | Good accuracy, multilingual; transformers.js is already a dependency. | CPU-only on this device is slow (seconds per utterance) and RAM-heavy; needs VAD/segmenting (`utteranceCutter` exists). |
 | **C. Small keyword/grammar recogniser (Vosk-style, or a small streaming model with a constrained grammar)** | Tiny offline model, supports a restricted command vocabulary. | ~40 MB, real-time on weak CPUs, high accuracy for a closed command set. | Weak on open vocabulary (names, "seaside"); needs a separate path for free-form queries. |
 | **D. Two-tier (recommended shape)** | Tier 1: wake word or push-to-talk + grammar recogniser for fixed commands (*pause, next, delete, yes, cancel, show me …*). Tier 2: free-form transcription (Whisper or Web Speech *if the user accepts cloud*) only for the phrase after "show me …" and for names. | Fast and robust for control; heavier model runs only when needed. | Two engines to integrate. |
-| **E. Native Android recogniser** | OS `SpeechRecognizer`. | Integrated. | Fire OS has no Google speech service by default **[verify]**; not portable. |
+| **E. Native Android recogniser** | OS `SpeechRecognizer`. | Integrated. | **Not available on the user's tablet (measured):** `SpeechRecognizer` reports unavailable and no recognition service is installed, even with sideloaded Play Services. |
 
 **Names are the hard case.** Mitigations: (1) constrain to the known people list plus "new person
 …"; (2) show the transcribed text on screen with an "is this right?" step; (3) allow touch/keyboard
@@ -606,8 +721,8 @@ Each spike is short and ends in a recorded number so the decisions in §7/§9 ar
 
 | # | Question | Method | Pass criterion |
 | --- | --- | --- | --- |
-| **S0** | What exactly can the Fire HD browser do? | Open a test page in Silk and in a minimal native Android test app (WebView page plus a native ONNX Runtime load; Tauri 2 shell only if still wanted): print `navigator.gpu`, `getUserMedia` (https/localhost), `SpeechRecognition`, wake lock, WASM SIMD/threads, memory (`performance.memory`, `navigator.deviceMemory`), `showDirectoryPicker`. Record Chromium version, RAM, free storage. | A one-page capability table for the user's actual model(s). |
-| **S1** | Can the tablet run any Gemma text encoder? | Load fp16 text model on WASM; measure load time, peak memory, per-query latency. If WebGPU exists, repeat q4. | Cold start ≤ 20 s, query ≤ 1.5 s, no tab kill over 1 h. |
+| **S0** | What exactly can the Fire HD browser do? | Open a test page in Silk and in a minimal native Android test app (WebView page plus a native ONNX Runtime load; Tauri 2 shell only if still wanted): print `navigator.gpu`, `getUserMedia` (https/localhost), `SpeechRecognition`, wake lock, WASM SIMD/threads, memory (`performance.memory`, `navigator.deviceMemory`), `showDirectoryPicker`. Record Chromium version, RAM, free storage. | A one-page capability table for the user's actual model(s). **Status: done for the native app (§5.0.1); the Silk/Chrome page checks are no longer needed now that native Android is chosen.** |
+| **S1** | Can the tablet run any Gemma text encoder? | Load fp16 text model on WASM; measure load time, peak memory, per-query latency. If WebGPU exists, repeat q4. | Cold start ≤ 20 s, query ≤ 1.5 s, no tab kill over 1 h. **Status: superseded by S1' (§7.3.2). Gemma is ruled out on memory; CLIP ViT-B/32 int8 passes the latency and RAM gates (0.26 s/image, 0.2 s/query, ~150 MB). Quality gate (S2) still open.** |
 | **S2** | Does vocabulary/tag search (D3-C/E) give acceptable results vs full Gemma? | On a 2–5k photo sample indexed on desktop, compare top-10 for ~30 queries (seaside, ocean, birthday, snow …) by full-Gemma vs vocabulary vs tag search; label relevance. | Recall@10 within an agreed gap of full-Gemma (e.g. ≥ 80%). |
 | **S3** | Which face stack works with this camera? | Capture 20+ frames of 3–4 people at 1, 1.5, 2 m in day/dim light; enrol each from ~10 library photos; compare NameTag (A) vs a modern ONNX stack (B) on TPR/FPR, latency, memory; verify licences. | ≥ 95% correct at 1.5 m in normal light with < 1% wrong-person switches; ≤ 500 ms per detection+embed. |
 | **S4** | Is voice good enough? | Test grammar recogniser and Whisper-tiny on the tablet mic at 1–2 m with room noise; measure command accuracy, name accuracy, latency; test self-echo with video audio. | ≥ 95% command accuracy; ≤ 1.5 s latency; names workable with the confirm step. |
@@ -618,6 +733,48 @@ Suggested order (updated 2026-11-13, tablet-first model selection, §7.3.1): **S
 across candidate models, then quality gate = S2) → lock model + equivalence test → S5 (desktop
 bundle import) → S3 → S4 → S6**. S0 decides whether plain Silk, Tauri or native
 app is even possible, so run it first; it is ~1 hour of work.
+
+### 12.1 Runtime decision record (app platform)
+
+The app lives in `packages/smart-photos/`. Question: HTML, Tauri, React Native or KMP (native Android)?
+
+**Already settled by measurement (2026-11-13):**
+
+| Option | Verdict | Evidence |
+| --- | --- | --- |
+| HTML page in Silk | **Rejected** for the main app (prototype UI only) | Silk = Chromium 85, no WASM SIMD, no WebGPU, 32-bit; camera only via `getUserMedia` (§5.0, §5.0.1). |
+| Tauri | **Rejected** | WebView is Amazon WebView 75 (no SIMD); a WebView shell cannot run the models acceptably (§5.0.1). |
+| KMP / native Android | **Leading** | ONNX Runtime 1.31.1 runs on `armeabi-v7a`; Camera2 gives 1600×1200 at 15 fps; real files, services (§5.0.1, §7.3.2). The user's `ochat` repo already uses KMP/Compose Multiplatform. |
+| React Native | **Open, untested** | Needs 32-bit builds of ONNX Runtime, a camera frame pipeline and an offline speech engine; JS-bridge cost in the camera loop. |
+
+**Gate (the vertical slice, `packages/smart-photos/slice/`)** proves the three unknowns on the real tablet, in native
+Kotlin (the Android target of the future KMP project; shared `commonMain` code is introduced when we adopt it):
+
+| # | Unknown | Slice test | Pass |
+| --- | --- | --- | --- |
+| G1 | 32-bit face stack | Detect + align + embed a live face (YuNet + SFace via ONNX Runtime); licences checked | Detection ≤ 150 ms and embedding ≤ 150 ms per frame; same person's repeated frames cosine ≥ 0.6 and different-person < 0.4 where testable; licences permit the intended use |
+| G2 | 32-bit offline speech | Vosk small English model with a closed command grammar | ≥ 90% of ~20 spoken commands recognised at ~1 m; result ≤ 1.5 s after the utterance |
+| G3 | Camera → model loop | Camera2 YUV at 1–2 Hz into G1 for **30 min** on the charger | No crash/OOM; frame rate and latency stay within 20% of the first minute; battery temperature rise ≤ 10 °C; memory flat |
+
+**Decision rule:** all of G1–G3 pass ⇒ **KMP (native Android) is adopted**, recorded here with date and numbers, and P1
+starts. Any fail ⇒ check whether React Native (or an alternative library) solves that specific failure *before*
+adopting it; if neither does, the fallback is Option C (home server, §9). **Decision date: when the slice's 30-minute
+run has finished.**
+
+**Interim results (2026-11-13, slice at `packages/smart-photos/slice/`, native Kotlin, `armeabi-v7a`, ONNX Runtime 1.31.1, Vosk 0.3.75):**
+
+| Gate | Evidence so far | Status |
+| --- | --- | --- |
+| G1 face stack | Port validated against the Python reference on a real photo: embedding cosine **0.985**, box within ~1 px, score 0.934 vs 0.935. Isolated latency on 1280×960 frames: **detect 138 ms median, embed 109 ms** (both ≤ 150 ms). An un-timed 95 ms cost was a heap→native buffer copy, removed with a reusable direct buffer (detect 214 → 138 ms). **Under full load** (camera + mic + YUV conversion) detect rises to **~230 ms**, embed stays ~108 ms. Licences: YuNet MIT, SFace Apache-2.0 (SFace's training-data terms not verified). Reference run on 120 album photos: 96 had faces, 195 faces, median face width 8% of frame. | Latency **pass in isolation**; **identity test (same ≥ 0.6, different < 0.4) pending a live session** |
+| G2 speech | Vosk small English model (41 MB, 32-bit `libvosk.so`) with a 21-command grammar plus `[unk]`: **21/21 commands correct, 4/4 unrelated phrases rejected**, decode ≈ **0.11× real time**, model load 1.2–1.3 s. Test audio was **synthetic clean TTS** (Microsoft David), so this is optimistic; a WAV-header bug (SAPI's audio starts at byte 46, not 44) was found and fixed. 30 minutes of open-mic listening in a quiet room produced **0 false commands**. | **Pass on synthetic speech**; **live ~1 m test pending** |
+| G3 camera → model loop (30 min, USB power, quiet room, nobody in front) | 2,869 cycles, **no crash**. Cycles/30 s 50.3 → 47.8 (**−5%**); detect 203 → 236 ms (**+16%**); embed 110 → 110 ms; battery temperature 22 → 23 °C (**+1 °C**); PSS 240 → **261 MB (+21 MB, ~0.7 MB/min)**. Loop cost per cycle ≈ YUV→ARGB conversion ~200 ms + detect ~230 ms + embed ~108 ms ≈ **540 ms**, i.e. ~1.7 Hz, not the planned 2 Hz. | Crash/rate/latency/temperature **pass**; **memory flat: inconclusive** (fix per-frame allocations, rerun); no real face was in view, so embeddings were synthetic |
+
+Caveats: CPU frequency samples taken from the host swung between 0.8 and 2.0 GHz (the governor scales dynamically; this does not by
+itself prove thermal throttling, and latency stayed within +16%); the run was on USB power from a PC in a cool room, so a
+wall-charger, warm-room soak is still needed (S6). Cheap wins identified: do the colour conversion at the detector's
+input size or in native code (~200 ms now), reuse per-frame arrays, and consider detecting at ≤ 1.5 Hz.
+
+**Result: _pending the live session_ (identity cosines, voice at ~1 m with the real mic, and a memory re-check).** Decision date moves to the end of that session.
 
 ## 13. Phasing (once the option is chosen)
 
@@ -685,5 +842,6 @@ app is even possible, so run it first; it is ~1 hour of work.
 | NameTag web = face-api TinyFaceDetector + 68-pt + 128-d, cosine 0.7, Orama + sql.js | `NameTag/docs/design.md`, `inferenceEngine.web.ts` |
 | Extension indexer stores vectors, 256 px thumbnails, `meta` with model/dtype/dim | `designLocalFolderSearch.md` §3.4 |
 | Fire HD 10 9th gen: Fire OS 7/Android 9, 32-bit ABI, 1.83 GB RAM, MT8183, Silk 85, WebViews 66/75, Chrome 119, 1600×1200 front camera, sideloaded Play Services | **Measured via ADB 2026-11-13** (§5.0, [KindleFireHD.md](KindleFireHD.md)) |
-| WebGPU absence, SIMD absence in Silk 85, Tauri's WebView choice, `armeabi-v7a` ONNX/LiteRT/speech support and speed, real camera preview sizes and low-light quality, mic quality, Web API support in Chrome 119 | **Inferred or unmeasured → S0** |
+| ONNX Runtime 1.31.1 runs on `armeabi-v7a` (CPU 4 threads ≈ 21 ms for a 0.4 GFLOP conv; NNAPI slower), camera 15 fps at 1600×1200 with fixed focus, mic floor −60.8 dBFS, no system speech recogniser, native WebView = Amazon WebView 75 | **Measured by the S0 probe 2026-11-13** (§5.0.1, `s0-probe/`) |
+| WebGPU absence (inferred from Chromium/Android versions, not probed), real-model latency and RAM, face accuracy at range and in dim light, speech accuracy at distance, sustained thermals, 32-bit builds of speech/face libraries | **Still unmeasured → S1', S3, S4, S6** |
 | Licences of candidate face and CLIP-family models | **Assumptions → S3** |

@@ -481,7 +481,7 @@ Index files carry a preprocessing version (`PREP_VERSION`); an index built with 
 
 **Video:** videos are indexed by three keyframes (at 15%, 50% and 85%), each embedded like a photo; a video scores as its best frame.
 Playback is muted by default ("sound on" / "sound off"), plays once, and the show moves on at the end (cut off after 30 s). Verified with
-test clips: a clip made from a snow photo ranks first for "snow" (0.257 against 0.235 for the best photo). Not yet done: video thumbnails in the
+test clips: a clip made from a snow photo ranks first for "snow" (0.257 against 0.235 for the best photo). Faces in videos are scanned too (section 13.1). Not done: video thumbnails in the
 delete bar, audio-based search, and a policy for very long videos beyond the 30 s cut-off.
 
 ### 7.4 D4 — Face detection and recognition
@@ -620,7 +620,7 @@ and overnight dim/black.
    show a number.
 4. User says "this is Rahul, Priya, Asha" → names are assigned in order to the **unnamed faces** (or
    to all faces if the user says "all"); "skip" leaves a face unnamed; "second one is Priya"
-   targets a number.
+   targets a number. A name the recogniser has never heard is typed, or **spelled out letter by letter** (section 13.1).
 5. Show the parsed assignment as text for a 3 s confirm; commit; the face embeddings join the
    person's exemplar set, improving later recognition. Provide **undo**.
 6. Edge cases: two faces overlap/rows (sort by x then y); a face is wrong person → "number 2 is
@@ -864,10 +864,10 @@ enrolment is stored app-private and survives restarts. **Voice listening is OFF 
 | Phase | Built | Verified on the tablet | Not verified / not built |
 | --- | --- | --- | --- |
 | **P1 Frame** | Slideshow (photos and videos), CLIP search (typed and voice), delete with confirm, undo and 30-day trash | Slideshow, search, video playback and search, delete, cancel and undo (including the original file date), trash purge | Voice commands (needs a person speaking); long run of the new app |
-| **P2 Faces** | Library face pass (YuNet + SFace, 2 photos/s), people with named exemplars, grouping of unnamed faces, People screen, naming the faces of the photo on screen (left to right, tap or voice), "photos of X", "X at the beach", "Delete all face data" | 1,427 photos scanned (2,352 faces); four clear groups found (548, 518, 508, 105 photos); person, two-person and person+scene searches; numbered naming overlay | Voice naming ("this is ..."): names outside the recogniser's vocabulary are rejected, so new names are typed; undo of a naming |
+| **P2 Faces** | Library face pass (YuNet + SFace, 2 photos/s), people with named exemplars, grouping of unnamed faces, People screen, naming the faces of the photo on screen (left to right, tap or voice), "photos of X", "X at the beach", "Delete all face data" | 1,427 photos scanned (2,352 faces); four clear groups found (548, 518, 508, 105 photos); person, two-person and person+scene searches; numbered naming overlay | Voice naming of a *new* name: the recogniser cannot hear a name it has never seen, so a new name is typed or spelled out (see the table below); there is no undo for naming by decision (rename or remove the person) |
 | **P3 Presence** | Front camera at 640x480, 1 Hz (0.5 Hz after 2 min with nobody), recognition against the exemplars, 3-in-a-row to enter, leave timeout, "private" people only shown alone, camera-on indicator, nothing stored | Detect, recognise, enter and leave through the real pipeline using library photos as frames (3 faces, 484 ms); camera starts and analyses (about 250 ms/frame) | Recognising a live person in front of the camera (the camera path is the slice's, which worked) |
-| **P4 Voice** | Grammar rebuilt from people names; "name the faces", "this is X", "number two is X", "photos of X", "show people", "sound on/off" | Grammar builds; no speech tested | Everything spoken |
-| **P6 Hardening** | Settings screen (persisted), night mode (screen off, camera and mic off), slow drift against burn-in, start on boot, microphone OFF / AUTO / ON, 30-day trash retention | Settings screen, night mode on and off, trash purge | Boot start (needs a reboot); wall-charger and warm-room soak; kiosk lock (needs device-owner or screen pinning by the user) |
+| **P4 Voice** | Grammar rebuilt from people names; "name the faces", "this is X", "number two is X", "photos of X", "show people", "sound on/off", "pause sensing", "search for" | Grammar builds; commands injected through the real handler; no live speech tested | Everything spoken |
+| **P6 Hardening** | Settings screen (persisted), night mode (screen off, camera and mic off), slow drift against burn-in, start on boot, microphone OFF / AUTO / ON, 30-day trash retention | Settings screen, night mode on and off, trash purge | Boot start (needs a reboot); wall-charger and warm-room soak. Kiosk lock is Android's screen pinning from a Settings button (a full device-owner kiosk is optional and advanced) |
 
 **Added 2026-11-14 (all verified on the tablet unless noted):**
 
@@ -877,6 +877,8 @@ enrolment is stored app-private and survives restarts. **Voice listening is OFF 
 | **Faces in videos** | A frame about every 2 s (up to 15, within the 30 s cap) through the same face step; repeats removed; videos join person albums and walk-up results. No naming from a playing video; a group seen only in videos is not listed on the People screen | A video cut from a photo of three people appeared for "Charlie and Alpha and Delta" and for Alpha |
 | **Free-form voice search** | Say "search for", then one phrase (about 9 s) with the same Vosk model in open-vocabulary mode; the heard text is shown and searched | Search path verified ("sunset over the mountains"); offline open-vocabulary test on synthetic speech: 8 of 10 phrases exact, 40 of 42 words; not tried with a real voice |
 | **Pin app to screen** (Settings) | Android's screen pinning; the same button unpins | Pinned (PINNED) and unpinned (NONE) |
+| **New names: type or spell** | "New person" offers **Type it** or **Spell it out**. Spelling listens for single letters only (plus space, back, clear, done, cancel) and builds the name in an editable box, with a visible "Mic on" indicator; it works even while the microphone mode is OFF and hands the microphone back when it closes | Both dialogs open and Cancel returns the microphone; offline test with synthetic speech and the same grammar: 8 of 8 names; not tried with a real voice (look-alike letters such as B, D, P, T will cause errors, hence "back" and the editable box) |
+| **Pause sensing** | Saying "pause sensing" turns the camera and microphone off until **Resume sensing** is pressed on the touch controls. Separately, the microphone pauses itself after 60 s (a Settings value) with no recognised command; a touch wakes it, and in AUTO mode a face coming back wakes it. The camera keeps running during that silence pause so walk-up detection does not switch off for people who never speak | Both paths verified on the tablet (command, Resume button, silence timeout shortened to 15 s for the test); not tried with a real voice |
 
 Free-form search only needs the phrase to be *mostly* right: CLIP tolerates a wrong word or two (for example "vote on the lake" still finds boats), and the heard text is always visible.
 

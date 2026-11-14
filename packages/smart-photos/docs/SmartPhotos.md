@@ -463,6 +463,27 @@ choose the cheapest configuration whose precision@8 is within ~10% (absolute ~0.
 the tablet. Text tower: **requantised int8 (chosen after the S2 judgement above; ~200 MB in the query phase)**; fp32 text (~315 MB) is only a fallback if quality complaints appear. Never ship the public `*_quantized.onnx` CLIP files. The tablet and any desktop builder must use the **same
 requantised files** (record their hashes in `manifest.json`, §7.2) or vectors will not be comparable.
 
+#### 7.3.4 Tablet-vs-desktop equivalence and video (2026-11-14)
+
+The first tablet build resized with Android's bilinear filter and read pixels with `Bitmap.getPixels`. Measured against the desktop vectors
+of the same 1,427 photos (`tools/equiv/`), that gave **mean cosine 0.945, worst 0.796, none at 0.99**. Two causes were found and fixed:
+
+1. **Resize:** Pillow's BICUBIC (kernel stretched by the shrink factor, 22-bit fixed point, horizontal pass then vertical) is now reproduced exactly
+   in Kotlin (`PilResize`), and JPEGs are decoded with the same power-of-two DCT scaling as Pillow's `draft()` (largest scale that keeps the
+   short side >= 448, at most 8).
+2. **Colour space:** most phone photos here are tagged Display P3. `getPixels` converts them to sRGB; the desktop pipeline ignores the profile and uses
+   the raw values. The tablet now reads the raw bytes (`copyPixelsToBuffer`), so a wide-gamut photo gets the same numbers as on the desktop.
+
+Result: the preprocessed 3x224x224 tensor is **bit-identical to Pillow's** on 12 photos spread over the album, including the EXIF orientations 3, 6
+and 8. Whole album after re-indexing: **mean cosine 0.987, worst 0.945, 33% at >= 0.99**. The remaining gap is not preprocessing: feeding the
+identical tensor to the int8 model gives ~0.992 on the tablet (ONNX Runtime 1.31 on ARM) against the desktop (1.32 on x86), so ~0.99 is the practical ceiling.
+Index files carry a preprocessing version (`PREP_VERSION`); an index built with other preprocessing is discarded and rebuilt.
+
+**Video:** videos are indexed by three keyframes (at 15%, 50% and 85%), each embedded like a photo; a video scores as its best frame.
+Playback is muted by default ("sound on" / "sound off"), plays once, and the show moves on at the end (cut off after 30 s). Verified with
+test clips: a clip made from a snow photo ranks first for "snow" (0.257 against 0.235 for the best photo). Not yet done: video thumbnails in the
+delete bar, audio-based search, and a policy for very long videos beyond the 30 s cut-off.
+
 ### 7.4 D4 — Face detection and recognition
 
 Two jobs with different costs: (i) **library faces** (batch, offline) and (ii) **live camera**
@@ -828,6 +849,18 @@ enrolment is stored app-private and survives restarts. **Voice listening is OFF 
 | **P4 — Voice** | Grammar commands; query phrases; left→right naming; voice delete + toast. | Hands-free operation. |
 | **P5 — Semantics on device (optional)** | Gemma text encoder or alternative on tablet; "Priya at the beach" composition. | Full semantic search. |
 | **P6 — Hardening** | Sync tombstones, trash, kiosk mode, boot-start, soak tests, settings. | Appliance-grade. |
+
+### 13.1 Implementation status (2026-11-14, app in `packages/smart-photos/frame/`)
+
+| Phase | Built | Verified on the tablet | Not verified / not built |
+| --- | --- | --- | --- |
+| **P1 Frame** | Slideshow (photos and videos), CLIP search (typed and voice), delete with confirm, undo and 30-day trash | Slideshow, search, video playback and search, delete, cancel and undo (including the original file date), trash purge | Voice commands (needs a person speaking); long run of the new app |
+| **P2 Faces** | Library face pass (YuNet + SFace, 2 photos/s), people with named exemplars, grouping of unnamed faces, People screen, naming the faces of the photo on screen (left to right, tap or voice), "photos of X", "X at the beach", "Delete all face data" | 1,427 photos scanned (2,352 faces); four clear groups found (548, 518, 508, 105 photos); person, two-person and person+scene searches; numbered naming overlay | Voice naming ("this is ..."): names outside the recogniser's vocabulary are rejected, so new names are typed; undo of a naming |
+| **P3 Presence** | Front camera at 640x480, 1 Hz (0.5 Hz after 2 min with nobody), recognition against the exemplars, 3-in-a-row to enter, leave timeout, "private" people only shown alone, camera-on indicator, nothing stored | Detect, recognise, enter and leave through the real pipeline using library photos as frames (3 faces, 484 ms); camera starts and analyses (about 250 ms/frame) | Recognising a live person in front of the camera (the camera path is the slice's, which worked) |
+| **P4 Voice** | Grammar rebuilt from people names; "name the faces", "this is X", "number two is X", "photos of X", "show people", "sound on/off" | Grammar builds; no speech tested | Everything spoken |
+| **P6 Hardening** | Settings screen (persisted), night mode (screen off, camera and mic off), slow drift against burn-in, start on boot, microphone OFF / AUTO / ON, 30-day trash retention | Settings screen, night mode on and off, trash purge | Boot start (needs a reboot); wall-charger and warm-room soak; kiosk lock (needs device-owner or screen pinning by the user) |
+
+Defaults are privacy-friendly: camera and microphone are OFF until enabled in Settings.
 
 ## 14. Open questions for you
 

@@ -20,6 +20,8 @@ class FrameView(ctx: Context) : View(ctx) {
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)   // dither: the dimmed, stretched backdrop otherwise bands
     private val shade = Paint().apply { color = 0x99000000.toInt() }
     private val src = Rect(); private val dst = Rect()
+    /** Burn-in protection: the picture wanders a little (about 1.2% of the screen, periods of 70-90 s). Off while faces are being named, so boxes stay aligned. */
+    var drift = false
 
     fun show(b: Bitmap?, animate: Boolean = true) {
         anim?.cancel()
@@ -34,8 +36,22 @@ class FrameView(ctx: Context) : View(ctx) {
         }
     }
 
+    /** Where the current photo is drawn (contain-fit, centred), or null if nothing is shown. Used to place face boxes on top of it. */
+    fun contentRect(): Rect? {
+        val s = cur ?: return null
+        if (width == 0 || height == 0) return null
+        val sc = minOf(width.toFloat() / s.full.width, height.toFloat() / s.full.height)
+        val w = (s.full.width * sc).toInt(); val h = (s.full.height * sc).toInt()
+        return Rect((width - w) / 2, (height - h) / 2, (width + w) / 2, (height + h) / 2)
+    }
+
     override fun onDraw(c: Canvas) {
         c.drawColor(0xFF000000.toInt())
+        if (drift) {
+            val t = android.os.SystemClock.uptimeMillis() / 1000.0
+            c.translate((Math.sin(t * 2 * Math.PI / 90) * 0.012 * width).toFloat(), (Math.cos(t * 2 * Math.PI / 70) * 0.012 * height).toFloat())
+            postInvalidateDelayed(250)
+        }
         prev?.let { if (fade < 1f) draw(c, it, 255) }
         cur?.let { draw(c, it, (255 * fade).toInt().coerceIn(0, 255)) }
     }

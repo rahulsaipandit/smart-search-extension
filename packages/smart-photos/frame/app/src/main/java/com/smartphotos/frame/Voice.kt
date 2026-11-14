@@ -13,7 +13,7 @@ import java.io.File
 /** Fixed commands (docs/SmartPhotos.md §8.2). "show me X" phrases are added from the search vocabulary. */
 val BASE_COMMANDS = listOf(
     "pause", "resume", "next photo", "previous photo", "delete this photo", "yes", "cancel", "undo that",
-    "show everything", "slower", "faster", "dim the screen", "brighten the screen", "stop listening",
+    "show everything", "slower", "faster", "sound on", "sound off", "dim the screen", "brighten the screen", "stop listening", "name the faces", "skip", "done", "show people",
 )
 
 /** Words offered after "show me" - the S2 query list plus a few extras. Anything else is rejected by the recogniser, not guessed. */
@@ -26,7 +26,11 @@ val SEARCH_WORDS = listOf(
 /** Offline Vosk recogniser restricted to a closed phrase list (+ `[unk]` so unrelated speech is rejected). */
 class Voice(modelDir: File, phrases: List<String>) {
     private val model: Model
-    private val grammar = "[" + (phrases + "[unk]").joinToString(",") { "\"$it\"" } + "]"
+    @Volatile private var grammar = grammarOf(phrases)
+    private fun grammarOf(p: List<String>) = "[" + (p + "[unk]").joinToString(",") { "\"$it\"" } + "]"
+
+    /** Takes effect the next time [start] is called (people were added or renamed, so their names must become recognisable). */
+    fun setPhrases(p: List<String>) { grammar = grammarOf(p) }
     @Volatile private var live: Thread? = null
     private var liveThread: Thread? = null
 

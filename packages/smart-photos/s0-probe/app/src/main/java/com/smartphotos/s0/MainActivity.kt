@@ -8,7 +8,6 @@ import ai.onnxruntime.OnnxJavaType
 import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
-import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
@@ -18,7 +17,6 @@ import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CaptureRequest
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.ImageReader
@@ -312,10 +310,10 @@ class MainActivity : Activity() {
             val bytes = readAsset(m.file)
             for (threads in intArrayOf(1, 2, 4, 8)) {
                 runCatching {
-                    val opts = OrtSession.SessionOptions().apply {
+                    OrtSession.SessionOptions().apply {
                         setIntraOpNumThreads(threads)
                         setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                    }
+                    }.use { opts ->
                     val tLoad = System.nanoTime()
                     env.createSession(bytes, opts).use { s ->
                         val loadMs = (System.nanoTime() - tLoad) / 1_000_000
@@ -333,7 +331,7 @@ class MainActivity : Activity() {
                         times.sort()
                         log("${m.label} threads=$threads: load=${loadMs}ms median=${"%.1f".format(times[times.size / 2])}ms min=${"%.1f".format(times.first())}ms max=${"%.1f".format(times.last())}ms pssMB=${pssMb()} nativeMB=${nativeMb()}")
                     }
-                    opts.close()
+                    }
                 }.onFailure { log("${m.file} threads=$threads failed: $it") }
             }
         }
@@ -341,12 +339,12 @@ class MainActivity : Activity() {
         // driver, so they run last and the report is flushed after every line.
         for (ep in listOf("xnnpack", "nnapi")) {
             runCatching {
-                val opts = OrtSession.SessionOptions().apply {
+                OrtSession.SessionOptions().apply {
                     when (ep) {
                         "xnnpack" -> addXnnpack(mapOf("intra_op_num_threads" to "4"))
                         else -> addNnapi()
                     }
-                }
+                }.use { opts ->
                 val bytes = readAsset("bench_conv.onnx")
                 env.createSession(bytes, opts).use { s ->
                     val n = 3 * 224 * 224
@@ -361,6 +359,7 @@ class MainActivity : Activity() {
                     }
                     times.sort()
                     log("conv with $ep: median=${"%.1f".format(times[times.size / 2])}ms")
+                }
                 }
             }.onFailure { log("$ep not usable: $it") }
         }
@@ -384,10 +383,10 @@ class MainActivity : Activity() {
                 System.gc()
                 val pssBefore = pssMb()
                 runCatching {
-                    val opts = OrtSession.SessionOptions().apply {
+                    OrtSession.SessionOptions().apply {
                         setIntraOpNumThreads(threads)
                         setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                    }
+                    }.use { opts ->
                     val t0 = System.nanoTime()
                     env.createSession(f.absolutePath, opts).use { s ->
                         val loadMs = (System.nanoTime() - t0) / 1_000_000
@@ -435,7 +434,7 @@ class MainActivity : Activity() {
                         log("${f.name} (${f.length() shr 20} MB) threads=$threads inputs=${ins.map { "${it.first}${it.third.contentToString()}" }} out=$outDesc")
                         log("   load=${loadMs}ms median=${"%.0f".format(times[times.size / 2])}ms p90=${"%.0f".format(times[(times.size * 0.9).toInt().coerceAtMost(times.size - 1)])}ms  pss before=${pssBefore}MB loaded=${pssLoaded}MB afterRun=${pssRun}MB (+${pssRun - pssBefore}MB)")
                     }
-                    opts.close()
+                    }
                 }.onFailure { log("${f.name} threads=$threads FAILED: $it") }
             }
         }

@@ -66,15 +66,19 @@ class VoiceCommands(modelDir: File) {
     fun startLive(onFinal: (String, Long) -> Unit, onLevel: (Double) -> Unit = {}) {
         if (live != null) return
         val t = Thread {
+            val self = Thread.currentThread()
             val minBuf = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            val rec = AudioRecord(MediaRecorder.AudioSource.MIC, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 4)
-            if (minBuf <= 0 || rec.state != AudioRecord.STATE_INITIALIZED) { rec.release(); live = null; return@Thread }
+            if (minBuf <= 0) { if (live === self) live = null; return@Thread }
+            val rec = runCatching { AudioRecord(MediaRecorder.AudioSource.MIC, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 4) }.getOrNull()
+            if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); if (live === self) live = null; return@Thread }
             val r = Recognizer(model, 16000f, grammar)
             val buf = ShortArray(2000)
             var lastPartialAt = 0L
             var lastPartial = ""
+            try {
             rec.startRecording()
-            while (live != null) {
+            // Bound to *this* thread: if a stop timed out and a new loop was started, the old one must not keep running.
+            while (live === self) {
                 val n = rec.read(buf, 0, buf.size)
                 if (n < 0) break
                 if (n == 0) continue
@@ -89,12 +93,15 @@ class VoiceCommands(modelDir: File) {
                     if (p.isNotEmpty() && p != lastPartial) { lastPartial = p; lastPartialAt = System.currentTimeMillis() }
                 }
             }
-            runCatching { rec.stop() }; rec.release(); r.close()
+            } finally { runCatching { rec.stop() }; rec.release(); r.close(); if (live === self) live = null }
         }
         t.name = "vosk-live"; live = t; liveThread = t; t.start()
     }
 
-    fun stopLive() { live = null }
+    val isLive: Boolean get() = live != null
+
+    /** Stops the mic loop and waits (briefly) until the microphone is released. Call from a background thread. */
+    fun stopLive() { live = null; liveThread?.join(1500); liveThread = null }
 
     /** Stops the mic loop and waits for it to finish before freeing the model it is still using. */
     fun close() { stopLive(); liveThread?.join(2000); liveThread = null; model.close() }

@@ -54,10 +54,11 @@ class MainActivity : Activity() {
     private val buttons = LinkedHashMap<String, Button>()
     @Volatile private var sensorOrientation = 270
     private var tone: ToneGenerator? = null
-    private val argbBuf = IntArray(1280 * 960)
+    private var argbBuf = IntArray(1280 * 960)
     private val previewBufs = arrayOf(arrayOfNulls<android.graphics.Bitmap>(1), arrayOfNulls<android.graphics.Bitmap>(1))
     private var previewIdx = 0
     private var lastPreview = 0L
+    private var previewOut = IntArray(0)   // reused every preview frame (camera thread only)
     private val dummyAligned = FloatArray(3 * 112 * 112) { (it % 251).toFloat() }
     private val engine = EnrollEngine { ev -> onEngineEvent(ev) }
     private val report = StringBuilder()
@@ -109,7 +110,7 @@ class MainActivity : Activity() {
 
     private fun styledButton(key: String, label: String, color: Int, onClick: () -> Unit): Button = Button(this).apply {
         text = label; setTextColor(Color.WHITE); textSize = 20f; isAllCaps = true; typeface = android.graphics.Typeface.DEFAULT_BOLD
-        setBackgroundColor(color); tag = color; setOnClickListener { onClick(); refreshButtons(engine.phase) }
+        background = GradientDrawable().apply { setColor(color); cornerRadius = 24f }; tag = color; setOnClickListener { onClick(); refreshButtons(engine.phase) }
     }.also { buttons[key] = it; btnBox!!.addView(it, LinearLayout.LayoutParams(0, 0, 1f)) }
 
     private fun buildLiveUi() {
@@ -118,22 +119,26 @@ class MainActivity : Activity() {
         stage.addView(g, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         val box = LinearLayout(this).also { btnBox = it }
         stage.addView(box, FrameLayout.LayoutParams(10, 10))
-        styledButton("start", "Start", 0xFF1FA85A.toInt()) { engine.start() }
-        styledButton("cancel", "Cancel", 0xFF3B4650.toInt()) { engine.reset() }
-        styledButton("name", "Name me", 0xFF0E7490.toInt()) { showNameDialog() }
-        styledButton("same", "That's me", 0xFF2563EB.toInt()) { engine.label = if (engine.label == "same") "none" else "same"; log("LABEL ${engine.label}") }
-        styledButton("other", "Someone else", 0xFFE59A12.toInt()) { engine.label = if (engine.label == "other") "none" else "other"; log("LABEL ${engine.label}") }
-        styledButton("redo", "Enroll again", 0xFF3B4650.toInt()) { log("RESET same=${engine.same.size} other=${engine.other.size}"); engine.reset() }
+        styledButton("start", "Start", 0xFF1FA85A.toInt()) { engine.start(false) }
+        styledButton("cancel", "Cancel", 0xFF3B4650.toInt()) { engine.cancel() }
+        styledButton("add", "Add person", 0xFF2563EB.toInt()) { engine.start(true) }
+        styledButton("name", "Name", 0xFF0E7490.toInt()) { nameRecognised() }
+        styledButton("redo", "Start over", 0xFF3B4650.toInt()) { confirmStartOver() }
         loadEnrollment()
         refreshButtons(Phase.LOADING)
+        g.onCycleListen = { cycleListen() }
         g.onLayoutRects = { _, br, horizontal ->
+            // Rebuild the row from scratch on every layout change so no stale LayoutParams can survive a rotation.
+            box.removeAllViews()
             box.orientation = if (horizontal) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             box.layoutParams = FrameLayout.LayoutParams(br.width(), br.height()).apply { leftMargin = br.left; topMargin = br.top }
             val gap = (br.height() * 0.03f).toInt()
-            for (b in buttons.values) (b.layoutParams as LinearLayout.LayoutParams).apply {
-                if (horizontal) { width = 0; height = LinearLayout.LayoutParams.MATCH_PARENT; weight = 1f; setMargins(gap, 0, gap, 0) }
-                else { width = LinearLayout.LayoutParams.MATCH_PARENT; height = 0; weight = 1f; setMargins(0, gap, 0, gap) }
+            for (b in buttons.values) {
+                val lp = if (horizontal) LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { setMargins(gap, 0, gap, 0) }
+                         else LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { setMargins(0, gap, 0, gap) }
+                box.addView(b, lp)
             }
+            box.requestLayout()
         }
         setContentView(stage)
         runCatching { tone = ToneGenerator(AudioManager.STREAM_MUSIC, 80) }
@@ -143,50 +148,74 @@ class MainActivity : Activity() {
         val show = when (phase) {
             Phase.READY -> listOf("start")
             Phase.COUNTDOWN, Phase.ENROLLING -> listOf("cancel")
-            Phase.MATCHING -> listOf("name", "same", "other", "redo")
+            Phase.MATCHING -> listOf("add", "name", "redo")
             else -> emptyList()
         }
         for ((k, b) in buttons) {
             b.visibility = if (k in show) View.VISIBLE else View.GONE
-            val selected = (k == "same" && engine.label == "same") || (k == "other" && engine.label == "other")
-            b.background = GradientDrawable().apply { setColor(b.tag as Int); cornerRadius = 24f; if (selected) setStroke(10, Color.WHITE) }
-            if (k == "name") b.text = engine.name?.let { "Name: $it (change)" } ?: "Name me"
-            if (k == "same") b.text = if (selected) "✓ That's me" else "That's me"
-            if (k == "other") b.text = if (selected) "✓ Someone else" else "Someone else"
+            if (k == "name") {
+                val t = guide?.snap?.takeIf { it.recognised }?.name?.let { "Rename $it" } ?: "Name this person"
+                if (b.text.toString() != t) b.text = t
+            }
         }
     }
 
     private val enrollFile by lazy { File(filesDir, "enrollment.json") }   // app-private; holds face embeddings (biometric), never photos
 
     @Synchronized private fun saveEnrollment() = runCatching {
+        val people = engine.export()
+        if (people.isEmpty()) { enrollFile.delete(); log("SAVED enrolment: nobody (file removed)"); return@runCatching }
         val arr = org.json.JSONArray()
-        for (e in engine.exportEnrolled()) arr.put(org.json.JSONArray().also { a -> e.forEach { a.put(it.toDouble()) } })
+        for (p in people) arr.put(org.json.JSONObject().put("name", p.name ?: org.json.JSONObject.NULL).put("embeddings",
+            org.json.JSONArray().also { es -> for (e in p.embs) es.put(org.json.JSONArray().also { a -> e.forEach { a.put(it.toDouble()) } }) }))
         // Write-then-rename so a crash mid-write can never leave a half-written (unreadable) enrolment.
         val tmp = File(enrollFile.parentFile, "enrollment.json.tmp")
-        tmp.writeText(org.json.JSONObject().put("name", engine.name ?: org.json.JSONObject.NULL).put("embeddings", arr).toString())
+        tmp.writeText(org.json.JSONObject().put("people", arr).toString())
         if (!tmp.renameTo(enrollFile)) { enrollFile.delete(); tmp.renameTo(enrollFile) }
-        log("SAVED enrolment: ${arr.length()} embeddings, name=${engine.name}")
+        log("SAVED ${people.size} people: " + people.joinToString { "${it.name ?: "(no name)"}=${it.embs.size}" })
+        if (people.size > 1) log(engine.separationReport())
     }.onFailure { log("save failed $it") }
+
+    private fun parsePerson(j: org.json.JSONObject): Person {
+        val arr = j.getJSONArray("embeddings")
+        val embs = List(arr.length()) { i -> val a = arr.getJSONArray(i); FloatArray(a.length()) { k -> a.getDouble(k).toFloat() } }
+            .filter { it.size == 128 }   // SFace dimension; anything else would index out of bounds when matching
+        return Person(if (j.isNull("name")) null else tidyName(j.getString("name")), embs)
+    }
 
     private fun loadEnrollment() = runCatching {
         if (!enrollFile.exists()) return@runCatching
-        val j = org.json.JSONObject(enrollFile.readText()); val arr = j.getJSONArray("embeddings")
-        val embs = List(arr.length()) { i -> val a = arr.getJSONArray(i); FloatArray(a.length()) { k -> a.getDouble(k).toFloat() } }
-            .filter { it.size == 128 }   // SFace dimension; anything else would index out of bounds when matching
-        engine.restore(embs, if (j.isNull("name")) null else j.getString("name"))
-        log("LOADED enrolment: ${embs.size} embeddings, name=${engine.name}")
+        val j = org.json.JSONObject(enrollFile.readText())
+        val list = if (j.has("people")) { val a = j.getJSONArray("people"); List(a.length()) { parsePerson(a.getJSONObject(it)) } } else listOf(parsePerson(j))   // old single-person file
+        engine.restore(list.filter { it.embs.isNotEmpty() })
+        log("LOADED ${list.size} people: " + list.joinToString { "${it.name ?: "(no name)"}=${it.embs.size}" })
     }.onFailure { log("load failed $it") }
 
-    private fun showNameDialog() {
-        val et = android.widget.EditText(this).apply { setText(engine.name ?: ""); setSingleLine(); textSize = 28f; setPadding(40, 30, 40, 30) }
-        android.app.AlertDialog.Builder(this).setTitle("What should I call you?").setView(et)
-            .setPositiveButton("Save") { _, _ -> engine.rename(et.text.toString()); refreshButtons(engine.phase) }
-            .setNegativeButton("Cancel", null).show()
+    /** Asks for a name for person [idx]; used right after a scan ("Who is this?") and by the Name button. */
+    private fun showNameDialog(idx: Int, title: String) {
+        val et = android.widget.EditText(this).apply { setText(engine.nameOf(idx) ?: ""); setSingleLine(); textSize = 28f; setPadding(40, 30, 40, 30) }
+        android.app.AlertDialog.Builder(this).setTitle(title).setView(et)
+            .setPositiveButton("Save") { _, _ -> engine.rename(idx, et.text.toString()); refreshButtons(engine.phase) }
+            .setNegativeButton("Skip", null).show()
+    }
+
+    private fun nameRecognised() {
+        val idx = engine.recognisedNow()
+        if (idx < 0) android.widget.Toast.makeText(this, "Face the camera first so I know who to name", android.widget.Toast.LENGTH_LONG).show()
+        else showNameDialog(idx, "What should I call this person?")
+    }
+
+    private fun confirmStartOver() {
+        val who = engine.export().joinToString(", ") { it.name ?: "(no name)" }
+        android.app.AlertDialog.Builder(this).setTitle("Erase saved faces and start over?")
+            .setMessage("This will permanently overwrite the face data saved for: $who.\n\nEveryone will have to be scanned again. This cannot be undone.")
+            .setPositiveButton("Erase and start over") { _, _ -> engine.startOver() }.setNegativeButton("Keep my faces", null).show()
     }
 
     private fun onEngineEvent(ev: String) {
         log("EVENT $ev")
-        if (ev == "done" || ev == "name") thread { saveEnrollment() }
+        if (ev == "done" || ev == "name" || ev == "reset") thread { saveEnrollment() }
+        if (ev == "done") runOnUiThread { if (!isFinishing && !destroyed) showNameDialog(engine.newIdx, "Face saved. Who is this?") }
         val t = tone ?: return
         runCatching {
             when (ev) {
@@ -204,6 +233,11 @@ class MainActivity : Activity() {
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (requestCode == 2) {   // microphone asked for from the mic icon
+            val ok = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            android.widget.Toast.makeText(this, if (ok) "Microphone allowed - tap the mic icon again" else "Microphone permission denied - voice stays off", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
         // Without the camera there is nothing to run; opening it would throw SecurityException on the worker thread.
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             guide?.fatal = "Camera permission is needed. Allow it in Settings and reopen the app."
@@ -420,10 +454,11 @@ class MainActivity : Activity() {
         synchronized(statsLock) { ticks++; convMs.add(conv); detMs.add(det); embMs.add(embT) }
         if (mode == "live") {
             val snap = engine.onFrame(faces, w, h, if (face != null) lumaOf(px, w, h, face) else 0f, if (face != null) emb else null)
-            if (snap.phase == Phase.MATCHING && !snap.cos.isNaN() && engine.label != "none") log("MATCH ${engine.label} cos=%.3f".format(snap.cos))
+            if (face != null) lastFaceAt = System.currentTimeMillis()
+            applyListening()
             val g = guide
             if (g != null) {
-                g.stats = engine.statsLines(); g.label = engine.label
+                g.stats = engine.peopleLines()
                 g.diag = "detect %.0f ms  embed %.0f ms  %d MB  %.1f C".format(mean(detMs), mean(embMs), pssMb(), batteryTemp())
                 g.snap = snap
                 runOnUiThread { refreshButtons(snap.phase) }
@@ -448,6 +483,57 @@ class MainActivity : Activity() {
     private fun batteryTemp(): Double = (registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1) / 10.0
     private fun batteryLevel(): Int = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
 
+    // ------------------------------------------------------------------ listening modes: OFF (default) / AUTO / ON
+    @Volatile private var listenMode = 0             // written on the UI thread, read on the frame worker
+    @Volatile private var lastFaceAt = 0L
+    private var voiceRunning = false                 // what we last asked for; guarded by this@applyListening's lock
+    private val voiceExec = Executors.newSingleThreadExecutor()
+    private var modeToast: android.widget.Toast? = null
+
+    private fun cycleListen() {
+        if (listenMode == 0 && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            android.widget.Toast.makeText(this, "Microphone permission is needed - please allow it", android.widget.Toast.LENGTH_LONG).show()
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 2); return
+        }
+        listenMode = (listenMode + 1) % 3
+        guide?.listenMode = listenMode
+        val msg = when (listenMode) {
+            0 -> "Listening OFF - the microphone is turned off."
+            1 -> "Listening AUTO - listens only while someone is in view."
+            else -> "Listening ON - always listening for commands."
+        }
+        modeToast?.cancel()
+        modeToast = android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).also { it.show() }
+        log("LISTEN mode=${arrayOf("off", "auto", "on")[listenMode]}")
+        applyListening()
+    }
+
+    /** Starts or stops the microphone to match the mode (AUTO = only while a face was seen in the last 5 s). Cheap; called every frame. */
+    @Synchronized private fun applyListening() {
+        val want = listenMode == 2 || (listenMode == 1 && System.currentTimeMillis() - lastFaceAt < 5000)
+        if (want == voiceRunning) return
+        voiceRunning = want
+        voiceExec.execute {
+            if (want) {
+                startVoice()
+                Thread.sleep(500)
+                val ok = voice?.isLive == true
+                guide?.micLive = ok
+                if (!ok && !destroyed) {   // no model, no permission or the mic is busy: fall back to OFF instead of showing "starting" forever
+                    log("microphone could not be started")
+                    runOnUiThread {
+                        listenMode = 0; guide?.listenMode = 0
+                        android.widget.Toast.makeText(this, "Could not start the microphone - listening is OFF", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                    synchronized(this) { voiceRunning = false }
+                }
+            } else {
+                guide?.micLive = false; guide?.micLevel = 0.0
+                voice?.stopLive()
+            }
+        }
+    }
+
     private fun startVoice() {
         if (!loadVoice()) { lastVoice = "(no model)"; return }
         voice!!.startLive({ text, ms ->
@@ -455,14 +541,13 @@ class MainActivity : Activity() {
             log("VOICE '$text' (ms after last partial: $ms)")
             guide?.onHeard(text)?.let { log("VOICE_MATCH '$it'") }
             val m = Regex("this is ([a-z]+)").find(text)
-            if (m != null && engine.phase == Phase.MATCHING && engine.name == null && guide?.snap?.recognised == true) { engine.rename(m.groupValues[1].replaceFirstChar { it.uppercase() }); runOnUiThread { refreshButtons(engine.phase) } }
+            val who = engine.recognisedNow()
+            if (m != null && engine.phase == Phase.MATCHING && who >= 0 && engine.nameOf(who) == null) { engine.rename(who, m.groupValues[1].replaceFirstChar { it.uppercase() }); runOnUiThread { refreshButtons(engine.phase) } }
         }, { level -> guide?.micLevel = level })
     }
 
     private fun live() {
         status = "live"
-        guide?.loadMsg = "Loading voice model…"
-        startVoice()
         guide?.loadMsg = "Loading face models…"
         startCamera(500, Size(1280, 960))
         guide?.loadMsg = "Waiting for the first camera picture…"
@@ -532,6 +617,7 @@ class MainActivity : Activity() {
         worker.shutdown()
         // Let an in-flight frame finish before freeing the native sessions it is using.
         runCatching { worker.awaitTermination(3, TimeUnit.SECONDS) }
+        voiceExec.shutdownNow()
         voice?.close(); pipeline?.close()
     }
 }

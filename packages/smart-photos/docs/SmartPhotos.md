@@ -774,7 +774,50 @@ itself prove thermal throttling, and latency stayed within +16%); the run was on
 wall-charger, warm-room soak is still needed (S6). Cheap wins identified: do the colour conversion at the detector's
 input size or in native code (~200 ms now), reuse per-frame arrays, and consider detecting at ≤ 1.5 Hz.
 
-**Result: _pending the live session_ (identity cosines, voice at ~1 m with the real mic, and a memory re-check).** Decision date moves to the end of that session.
+**Live session results (2026-11-14, same slice, now with a guided enrolment/recognition UI; the device owner at ~1 m, real microphone and front camera):**
+
+| Gate | Evidence | Status |
+| --- | --- | --- |
+| G2 speech, live | Guided one-command-at-a-time test: the prompt waits until the recogniser hears exactly the phrase. **All 21 commands were completed in order** with the real mic at ~1 m. Results arrived **0.7–1.3 s** after the speaker finished (limit 1.5 s). Unrelated sentences produced no command. Recognition sometimes merged back-to-back commands into one result ("next photo previous photo …"), and "resume" came back as "the resume": the app must match phrases inside a result, not require an exact string. First-attempt accuracy was **not** recorded (the attempt log was lost on an app restart). | **Pass** (accuracy per attempt still to be counted) |
+| G1 face, live identity | First two live runs used a **single enrolment frame**: same-person cosine mean 0.43 (n=104, min 0.04, max 0.82) and 0.46 (n=168, max 0.90): **below the 0.6 target**, but the label stayed on "same" while the user spoke, looked away and moved, so these numbers mix good and bad frames. A 5-pose enrolment (straight, left, right, chin up, chin down; auto-captured) was completed and saved; **the same-person / different-person scores with the 5-pose enrolment have not been measured yet.** | **Pending** (needs one live run with a second person) |
+| Persistence | Enrolment (5 embeddings + name) is saved to app-private storage and reloaded on launch (`LOADED enrolment: 5 embeddings`); the name can be set by typing or by saying "this is <name>". | Works |
+
+**Engineering finding: camera stall.** With the `ImageReader` holding a 2-image pool and the colour conversion running inside the
+camera callback, the camera stopped delivering frames after ~60–185 frames (no error, process alive, the HAL reported
+"Frames produced: 185"). It happened in portrait, where the rotation step is slower, and also with the old text-only mode.
+Fix: copy the YUV planes out and release the image immediately, convert on the worker thread, and raise the pool to 4. After
+the fix: **958 frames in 50 s (~19 fps), analysis ticking continuously**. Lesson for the real app: never do per-frame work
+while holding a camera buffer, and never add a second capture stream (a `TextureView` preview stream also froze the session on
+this device). The on-screen mirror is drawn from the same frames at ~12 fps.
+
+**Rotation:** the camera frame rotation is now recomputed from the display rotation on every frame, so the picture and the
+face box follow portrait/landscape. Verified in portrait; landscape still to be confirmed by hand.
+
+**G1 identity result (2026-11-14, two people enrolled with the guided 5-pose scan; the scan itself is the test):**
+
+| Measure | Result | Target |
+| --- | --- | --- |
+| Same-person scores (all pose pairs of one person, n = 16) | mean **0.66**, min 0.48, max 0.88 | ≥ 0.6 on average |
+| Different-person scores (every pose of person A against every pose of person B, n = 20) | mean **0.20**, min 0.11, max **0.34** | < 0.4 |
+| Gap between the groups | highest different-person 0.34 < lowest same-person 0.48; OpenCV threshold 0.363 sits in the gap | separable |
+| Live recognition of the enrolled owner (several launches, including portrait and landscape, a hand over the chin, a low camera angle) | 0.62, 0.66, 0.68, 0.75, 0.82 | ≥ 0.363 |
+
+Caveats: one pair of people; the second person's scan captured 4 of 5 poses (one skipped); the owner's own pose pairs go as low
+as 0.48 (left vs right profile), so the threshold must stay low and a 5-pose template is needed; live different-person scores
+were not recorded separately (the template cross-scores above stand in for them). Worth re-measuring with a larger household
+once the real app exists.
+
+**Decision (2026-11-14): native Android is adopted as the app platform (Kotlin now, KMP shared code introduced in P1).**
+G1 passes (latency in isolation, identity separation), G2 passes (21/21 live, 0.7–1.3 s), G3 passes on crash, rate, latency and
+temperature. React Native was not needed and was not tested. **Still open, none of which reverses the decision:** (1) a 30-minute
+re-run of the soak with the final UI to confirm memory is flat (the UI has run for several minutes at 245–268 MB); (2) a
+wall-charger, warm-room soak (S6); (3) first-attempt voice accuracy per command, which was not logged; (4) per-frame colour
+conversion (~200 ms) still to be made cheaper.
+
+**Product flow validated in the slice (carry into P1):** first scan → name; "Add person" for each further person (refuses a
+face that is already enrolled, ≥ 0.50 similarity); recognition against everybody (best match ≥ 0.363); unknown face → "Unknown
+person - tap ADD PERSON"; names are tidied to Title Case; "Start over" names the people it will erase and asks for confirmation;
+enrolment is stored app-private and survives restarts. **Voice listening is OFF by default** and is cycled from the mic icon: OFF (microphone released, voice model not even loaded) → AUTO (listens only while a face was seen in the last 5 s) → ON (always); each change shows a toast.
 
 ## 13. Phasing (once the option is chosen)
 

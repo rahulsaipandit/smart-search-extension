@@ -182,6 +182,7 @@ class GuideView(ctx: Context) : View(ctx) {
         } else { fill.color = 0xFF000000.toInt(); c.drawRect(prect, fill) }
         drawBanner(c, banner(s, now, stale), now)
         drawOverlay(c, s, now, stale)
+        drawStage(c, s, now, stale)
         drawPanel(c, s, now)
         drawStrip(c, now)
         postInvalidateDelayed(40)
@@ -250,7 +251,7 @@ class GuideView(ctx: Context) : View(ctx) {
         }
         if (dir != null) {
             val pr = ph * 0.11f; val a = (160 + 95 * pulse(now)).toInt()
-            val (ax, ay) = when (dir) { Icon.ARROW_L -> (prect.left + pr * 1.4f) to cy; Icon.ARROW_R -> (prect.right - pr * 1.4f) to cy; Icon.ARROW_U -> cx to (prect.top + pr * 1.4f); else -> cx to (prect.bottom - pr * 1.4f - 0.1f * ph) }
+            val (ax, ay) = when (dir) { Icon.ARROW_L -> (prect.left + pr * 1.4f) to cy; Icon.ARROW_R -> (prect.right - pr * 1.4f) to cy; Icon.ARROW_U -> cx to (prect.top + pr * 1.4f + 0.09f * ph); else -> cx to (prect.bottom - pr * 1.4f - 0.1f * ph) }
             fill.color = (a shl 24) or 0x2563EB; c.drawCircle(ax, ay, pr * 1.25f, fill)
             drawIcon(c, dir, ax, ay, pr, BLUE)
         }
@@ -266,6 +267,36 @@ class GuideView(ctx: Context) : View(ctx) {
         if (s.capturedAtMs > 0 && sinceCap < 700) { fill.color = ((90 * (1 - sinceCap / 700f)).toInt() shl 24) or 0x1FA85A; c.drawRect(prect, fill) }
         if ((s.capturedAtMs > 0 && sinceCap < 1100) || s.phase == Phase.DONE) { fill.color = 0xCC1FA85A.toInt(); c.drawCircle(cx, cy, ph * 0.14f, fill); drawIcon(c, Icon.CHECK, cx, cy, ph * 0.12f, GREEN) }
         if (s.skippedAtMs > 0 && now - s.skippedAtMs < 900) { fill.color = 0xCCE59A12.toInt(); c.drawCircle(cx, cy, ph * 0.12f, fill); drawIcon(c, Icon.WARN, cx, cy, ph * 0.1f, AMBER) }
+    }
+
+    /** 0 = waiting for a face, 1 = face detected, 2 = detection complete. */
+    private fun stageOf(s: Snapshot?, stale: Boolean): Int {
+        if (s == null || stale || s.phase == Phase.LOADING || fatal != null) return 0
+        if (s.phase == Phase.DONE || (s.phase == Phase.MATCHING && !s.cos.isNaN())) return 2
+        return if (s.face != null && System.currentTimeMillis() - s.frameMs < 1500) 1 else 0
+    }
+
+    /** Big status pill over the top of the picture: Waiting for face -> Face detected -> Face detection complete. */
+    private fun drawStage(c: Canvas, s: Snapshot?, now: Long, stale: Boolean) {
+        val st = stageOf(s, stale)
+        val label = when (st) { 0 -> "Waiting for face…"; 1 -> "Face detected"; else -> "Face detection complete" }
+        val col = when (st) { 0 -> AMBER; 1 -> BLUE; else -> GREEN }
+        val ph = prect.height().toFloat(); val pw = prect.width().toFloat()
+        val g = 0.02f * pw
+        val r = RectF(prect.left + g, prect.top + g, prect.right - g, prect.top + g + 0.085f * ph)
+        fill.color = 0xD9000000.toInt(); c.drawRoundRect(r, r.height() / 2, r.height() / 2, fill)
+        val cy = r.centerY(); val dr = r.height() * 0.13f
+        for (i in 0..2) {   // progress dots
+            val x = r.left + r.height() * 0.55f + i * dr * 3.2f
+            fill.color = if (i <= st) col else GREY
+            val rad = if (i == st && st < 2) dr * (1f + 0.35f * pulse(now)) else dr
+            c.drawCircle(x, cy, rad, fill)
+        }
+        val tx = r.left + r.height() * 0.55f + 3 * dr * 3.2f + r.height() * 0.1f
+        fill.color = col; c.drawRoundRect(RectF(tx - dr * 1.2f, r.top + r.height() * 0.2f, tx - dr * 0.6f, r.bottom - r.height() * 0.2f), dr, dr, fill)
+        text.color = WHITE; fit(text, label, r.height() * 0.5f, r.right - tx - r.height() * 0.3f)
+        c.drawText(label, tx + dr * 0.4f, cy + text.textSize * 0.35f, text)
+        if (st == 2) drawIcon(c, Icon.CHECK, r.right - r.height() * 0.55f, cy, r.height() * 0.28f, col)
     }
 
     private fun guideOval(c: Canvas, cx: Float, cy: Float, ph: Float, alpha: Float) {

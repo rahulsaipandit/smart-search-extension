@@ -52,7 +52,23 @@ object Models {
 
     /** Peak disk space needed (a zip and its unpacked folder exist side by side before the zip is deleted), plus the room to keep free. */
     fun diskNeeded(specs: List<ModelSpec>) = specs.sumOf { if (it.unzipTo != null) it.bytes + it.unpackedBytes else it.bytes }
-    const val KEEP_FREE = 300L * 1024 * 1024
+    const val KEEP_FREE = 300_000_000L   // 300 MB, so the screens and the docs say the same number
+
+    /** Debug builds only (test hook): pretend this many bytes are free. */
+    @Volatile var debugFreeBytes: Long? = null
+
+    class SpaceCheck(val needed: Long, val usable: Long) { val ok: Boolean get() = needed <= usable }
+
+    /**
+     * Will [specs] fit? Asked BEFORE the user is invited to download (so a full tablet is told up front, not after pressing Download) and again
+     * when the download starts. A partly downloaded file counts as already stored. The frame never uses the last [KEEP_FREE] bytes.
+     */
+    fun spaceCheck(base: File, specs: List<ModelSpec> = missing(base)): SpaceCheck {
+        val d = dir(base).also { it.mkdirs() }
+        val free = debugFreeBytes ?: runCatching { android.os.StatFs(d.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
+        val partial = specs.sumOf { s -> File(d, s.target + ".part").let { if (it.exists()) minOf(it.length(), s.bytes) else 0L } }
+        return SpaceCheck(diskNeeded(specs) - partial, maxOf(0L, free - KEEP_FREE))
+    }
 }
 
 class ModelProgress(val index: Int, val count: Int, val title: String, val done: Long, val total: Long, val overallDone: Long, val overallTotal: Long)
@@ -88,9 +104,8 @@ class ModelDownloader(
 
     private fun run(specs: List<ModelSpec>) {
         val dir = Models.dir(base).also { it.mkdirs() }
-        val free = runCatching { android.os.StatFs(dir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
-        val need = Models.diskNeeded(specs) - specs.sumOf { s -> File(dir, s.target + ".part").let { if (it.exists()) it.length() else 0L } }
-        if (need + Models.KEEP_FREE > free) throw IOException("Not enough space: about ${need / 1_000_000} MB needed, ${maxOf(0L, free - Models.KEEP_FREE) / 1_000_000} MB can be used. Free some space and try again.")
+        val space = Models.spaceCheck(base, specs)
+        if (!space.ok) throw IOException("Not enough space: about ${space.needed / 1_000_000} MB needed, ${space.usable / 1_000_000} MB can be used. Free some space and try again.")
         val total = specs.sumOf { it.bytes }
         var before = 0L
         android.util.Log.i("FRAME", "MODELS download: ${specs.size} file(s), ${specs.sumOf { it.bytes } / 1_000_000} MB total")
@@ -126,7 +141,7 @@ class ModelDownloader(
                     code == 200 && have == 0L -> false
                     code == 200 -> { part.delete(); false }    // the server ignored the resume request: start this file again
                     code == 416 -> { part.delete(); c.disconnect(); continue }
-                    in 400..499 && code != 408 && code != 429 -> { c.disconnect(); throw Fatal("${s.title}: the server answered HTTP $code") }
+                    code in 400..499 && code != 408 && code != 429 -> { c.disconnect(); throw Fatal("${s.title}: the server answered HTTP $code") }
                     else -> { c.disconnect(); throw IOException("${s.title}: the server answered HTTP $code") }
                 }
                 val written = if (append) have else 0L

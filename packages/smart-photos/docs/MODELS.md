@@ -58,4 +58,4 @@ Location on the tablet: `/sdcard/Android/data/com.smartphotos.frame/files/models
 - **Check:** every file's SHA-256 is compared with the fingerprint in the table above (`Models.kt`). A mismatch deletes the file and shows an error; nothing unchecked is ever used.
 - **Voice model:** the zip is checked, then unpacked (entries that would land outside the target folder are refused) and deleted.
 - **Privacy:** the internet permission is used for this download only. The request carries a plain `User-Agent: SmartPhotosFrame/0.1` and nothing else: no photo, face, voice or device data leaves the tablet.
-- **Space:** the app refuses to start a download that would leave less than 300 MB free.
+- **Space:** checked **before the user is asked** (the consent screen warns in red, shows the numbers and replaces Download with Check again if the files will not fit) and again when the download starts. A partly downloaded file counts as already stored, a zip and its unpacked folder are counted together, and the app never uses the last 300 MB.

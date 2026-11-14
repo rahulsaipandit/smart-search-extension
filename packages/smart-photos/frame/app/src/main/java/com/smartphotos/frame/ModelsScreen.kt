@@ -61,8 +61,9 @@ class ModelsScreen(
     private fun renderPrompt() {
         val missing = Models.missing(base)
         if (missing.isEmpty()) { renderDone(); return }
-        android.util.Log.i("FRAME", "MODELS prompt shown: ${Models.remainingBytes(base, missing) / 1_000_000} MB to download")
+        android.util.Log.i("FRAME", "MODELS prompt shown: ${Models.remainingBytes(base, missing) / 1_000_000} MB to download; space ${if (Models.spaceCheck(base, missing).ok) "ok" else "NOT ENOUGH"}")
         val remaining = Models.remainingBytes(base, missing)
+        val space = Models.spaceCheck(base, missing)
         val clipBytes = missing.filter { it.unzipTo == null }.sumOf { it.bytes }
         val voiceBytes = missing.filter { it.unzipTo != null }.sumOf { it.bytes }
         card {
@@ -73,10 +74,13 @@ class ModelsScreen(
                 "\nThese are downloaded once, from huggingface.co and alphacephei.com. Nothing about you, your photos or your voice is sent: the download only asks for the files. " +
                 "After that the frame works without the internet.", 17f).apply { setPadding(0, act.dp(14), 0, act.dp(10)) })
             addView(act.uiLabel("Download size: ${mb(remaining)}.  ${network()}${if (remaining < missing.sumOf { it.bytes }) "  (a partly finished download will be continued)" else ""}", 16f, true).apply { setTextColor(0xFF9AB4C7.toInt()) })
+            if (!space.ok) addView(act.uiLabel("Not enough free space on this tablet: about ${mb(space.needed)} is needed while unpacking, but only ${mb(space.usable)} can be used (the frame always keeps ${mb(Models.KEEP_FREE)} free). " +
+                "Free some space, for example by removing apps or photos you do not need, then press Check again.", 16f, true).apply { setTextColor(0xFFFFB4A9.toInt()); setPadding(0, act.dp(10), 0, act.dp(4)) })
             addView(act.uiLabel("Without them the frame still shows your photos; only search and voice stay off. You can do this later in Settings.", 15f).apply { setTextColor(0xFF8A97A3.toInt()); setPadding(0, act.dp(8), 0, act.dp(18)) })
             val row = LinearLayout(act).apply { gravity = Gravity.END }
             row.addView(act.uiButton("Not now") { onClose(true) })
-            row.addView(act.uiButton("Download ${mb(remaining)}", 0xFF2563EB.toInt()) { startDownload() }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = act.dp(12) })
+            if (space.ok) row.addView(act.uiButton("Download ${mb(remaining)}", 0xFF2563EB.toInt()) { startDownload() }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = act.dp(12) })
+            else row.addView(act.uiButton("Check again", 0xFF2563EB.toInt()) { renderPrompt() }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = act.dp(12) })
             addView(row)
         }
     }

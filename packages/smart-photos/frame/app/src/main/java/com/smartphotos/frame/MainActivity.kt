@@ -121,6 +121,8 @@ class MainActivity : Activity() {
         base = getExternalFilesDir(null) ?: filesDir
         val root = (if (debuggable) intent.getStringExtra("root") else null)?.let { File(it) } ?: File(base, "photos")
         store = PhotoStore(root, filesDir)
+        if (debuggable && intent.getBooleanExtra("models_reset", false)) Settings(this).modelsDeclined = false   // test hook: forget "Not now"
+        if (debuggable && intent.hasExtra("models_fakefree")) Models.debugFreeBytes = intent.getLongExtra("models_fakefree", 0L) * 1_000_000L   // test hook: pretend the tablet is nearly full
         faces = FaceStore(filesDir); peopleStore = People(filesDir)
         buildUi()
         ctl = PeopleController(this, ui, bg, store, faces, peopleStore, faceOverlay, { t, ms -> toast(t, ms) }, { peopleChanged() }, { name -> search(name) }, { title, done -> startSpelling(title, done) })

@@ -58,7 +58,6 @@ class MainActivity : Activity() {
     private val previewBufs = arrayOf(arrayOfNulls<android.graphics.Bitmap>(1), arrayOfNulls<android.graphics.Bitmap>(1))
     private var previewIdx = 0
     private var lastPreview = 0L
-    private var previewOut = IntArray(0)   // reused every preview frame (camera thread only)
     private val dummyAligned = FloatArray(3 * 112 * 112) { (it % 251).toFloat() }
     private val engine = EnrollEngine { ev -> onEngineEvent(ev) }
     private val report = StringBuilder()
@@ -127,6 +126,7 @@ class MainActivity : Activity() {
         loadEnrollment()
         refreshButtons(Phase.LOADING)
         g.onCycleListen = { cycleListen() }
+        g.onLog = { log(it) }
         g.onLayoutRects = { _, br, horizontal ->
             // Rebuild the row from scratch on every layout change so no stale LayoutParams can survive a rotation.
             box.removeAllViews()
@@ -350,8 +350,6 @@ class MainActivity : Activity() {
     }
 
     private var lastTick = 0L
-    private var framesSeen = 0
-    private val noPreview by lazy { intent.getBooleanExtra("nopreview", false) }
 
     private fun startCamera(intervalMs: Long, size: Size) {
         loadPipeline()
@@ -364,9 +362,8 @@ class MainActivity : Activity() {
             try {
                 val img = r.acquireLatestImage() ?: return@setOnImageAvailableListener
                 val now = System.currentTimeMillis()
-                if (++framesSeen % 60 == 0) log("HEARTBEAT frames=$framesSeen ticks=$ticks busy=${busy.get()}")
                 val rot = currentRot()   // re-read every frame: the device may have been rotated
-                val wantPreview = mode == "live" && !noPreview && now - lastPreview >= 80
+                val wantPreview = mode == "live" && now - lastPreview >= 80
                 val wantAnalysis = !busy.get() && now - lastTick >= intervalMs
                 if (!wantPreview && !wantAnalysis) { img.close(); return@setOnImageAvailableListener }
                 // Copy the planes out and release the camera buffer at once; all conversion happens off the camera's buffer pool.
@@ -584,30 +581,52 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ YUV_420_888 -> rotated ARGB
 
+    private val convPool = Executors.newFixedThreadPool(4)
+
+    /** Same maths as before (BT.601 integer), but: chroma shared per pixel pair, no per-pixel rotation branch, rows split over 4 threads. */
     private fun yuvToArgb(img: Yuv, rot: Int): Triple<IntArray, Int, Int> {
+        val w = img.w; val h = img.h
+        val ow = if (rot % 180 == 0) w else h; val oh = if (rot % 180 == 0) h else w
+        val out = argbBuf
+        val bands = 4
+        val tasks = (0 until bands).map { b ->
+            java.util.concurrent.Callable { convertRows(img, rot, out, ow, h * b / bands, h * (b + 1) / bands) }
+        }
+        convPool.invokeAll(tasks).forEach { it.get() }
+        return Triple(out, ow, oh)
+    }
+
+    private fun convertRows(img: Yuv, rot: Int, out: IntArray, ow: Int, y0: Int, y1: Int) {
         val w = img.w; val h = img.h
         val yb = img.y; val ub = img.u; val vb = img.v
         val yrs = img.yrs; val urs = img.urs; val ups = img.ups; val vrs = img.vrs; val vps = img.vps
-        val ow = if (rot % 180 == 0) w else h; val oh = if (rot % 180 == 0) h else w
-        val out = argbBuf
-        for (y in 0 until h) {
-            val yi = y * yrs; val uvr = y shr 1
-            for (x in 0 until w) {
-                val yy = yb[yi + x].toInt() and 255
-                val u = (ub[uvr * urs + (x shr 1) * ups].toInt() and 255) - 128
-                val v = (vb[uvr * vrs + (x shr 1) * vps].toInt() and 255) - 128
-                var r = yy + ((359 * v) shr 8); var g = yy - ((88 * u + 183 * v) shr 8); var b = yy + ((454 * u) shr 8)
-                r = if (r < 0) 0 else if (r > 255) 255 else r; g = if (g < 0) 0 else if (g > 255) 255 else g; b = if (b < 0) 0 else if (b > 255) 255 else b
-                val dst = when (rot) {
-                    90 -> x * ow + (h - 1 - y)                            // dst(col = h-1-y, row = x)
-                    180 -> (h - 1 - y) * ow + (w - 1 - x)
-                    270 -> (w - 1 - x) * ow + y                           // dst(col = y, row = w-1-x)
-                    else -> y * ow + x
+        for (y in y0 until y1) {
+            val yi = y * yrs; val uRow = (y shr 1) * urs; val vRow = (y shr 1) * vrs
+            // destination index of pixel (x, y) is base + x * step
+            val base: Int; val step: Int
+            when (rot) {
+                90 -> { base = h - 1 - y; step = ow }
+                180 -> { base = (h - 1 - y) * ow + (w - 1); step = -1 }
+                270 -> { base = (w - 1) * ow + y; step = -ow }
+                else -> { base = y * ow; step = 1 }
+            }
+            var x = 0
+            while (x < w) {   // one chroma sample covers pixels x and x + 1 (the last pixel of an odd-width row stands alone)
+                val c = x shr 1
+                val u = (ub[uRow + c * ups].toInt() and 255) - 128
+                val v = (vb[vRow + c * vps].toInt() and 255) - 128
+                val dr = (359 * v) shr 8; val dg = (88 * u + 183 * v) shr 8; val db = (454 * u) shr 8
+                for (k in 0 until minOf(2, w - x)) {
+                    val yy = yb[yi + x + k].toInt() and 255
+                    var r = yy + dr; var g = yy - dg; var b = yy + db
+                    if ((r or g or b) and -256 != 0) {   // any channel outside 0..255
+                        r = if (r < 0) 0 else if (r > 255) 255 else r; g = if (g < 0) 0 else if (g > 255) 255 else g; b = if (b < 0) 0 else if (b > 255) 255 else b
+                    }
+                    out[base + (x + k) * step] = (255 shl 24) or (r shl 16) or (g shl 8) or b
                 }
-                out[dst] = (255 shl 24) or (r shl 16) or (g shl 8) or b
+                x += 2
             }
         }
-        return Triple(out, ow, oh)
     }
 
     override fun onDestroy() {
@@ -615,8 +634,9 @@ class MainActivity : Activity() {
         super.onDestroy()
         camera?.close(); reader?.close(); camThread.quitSafely()
         worker.shutdown()
-        // Let an in-flight frame finish before freeing the native sessions it is using.
+        // Let an in-flight frame finish before freeing the native sessions it is using (and before its conversion pool goes away).
         runCatching { worker.awaitTermination(3, TimeUnit.SECONDS) }
+        convPool.shutdown()
         voiceExec.shutdownNow()
         voice?.close(); pipeline?.close()
     }

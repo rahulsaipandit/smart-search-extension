@@ -56,10 +56,15 @@ class GuideView(ctx: Context) : View(ctx) {
             matchedCmd = target; matchedAt = now; cmdIndex++; last = target
         }
         if (last != null) {
-            if (cmdIndex >= COMMANDS.size) onLog?.invoke("FIRST_ATTEMPT_SUMMARY $firstTry/${COMMANDS.size} commands recognised on the first attempt")
+            if (cmdIndex >= COMMANDS.size) {
+                onLog?.invoke("FIRST_ATTEMPT_SUMMARY $firstTry/${COMMANDS.size} commands recognised on the first attempt")
+                val missed = COMMANDS.indices.filter { misses[it] > 0 }.joinToString { "'${COMMANDS[it]}' x${misses[it]}" }
+                if (missed.isNotEmpty()) onLog?.invoke("FIRST_ATTEMPT_MISSED $missed")
+            }
             return last
         }
         misses[cmdIndex]++
+        onLog?.invoke("ATTEMPT_MISS wanted='${COMMANDS[cmdIndex]}' heard='$clean' (miss ${misses[cmdIndex]})")
         wrongText = clean; wrongAt = now
         return null
     }

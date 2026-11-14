@@ -522,7 +522,7 @@ and accuracy on the tablet mic.
 | Option | Behaviour | Fits when |
 | --- | --- | --- |
 | **A. Hide** | Mark as removed in the frame's index only; original untouched. | Originals are not writable (web-only, microSD read-only). Safe default. |
-| **B. Move to a trash folder** | Original moved under `.trash/` with 30-day retention; "undo" available. | Tauri/native app or LAN server with write access. Recommended when possible. |
+| **B. Move to a trash folder** | Original moved under `.trash/` with 30-day retention; "undo" available. | Native app with file access (decided), or a LAN server with write access. Recommended. |
 | **C. Permanent delete** | Remove the file. | Only with explicit settings opt-in; never the default. |
 
 Confirmation flow (all options): on "delete this photo" show a **toast with the thumbnail, a
@@ -619,7 +619,7 @@ accessibility.
 | `settings` | thresholds, dim schedule, camera schedule, voice mode, presence policy |
 | `meta` | embedding model, dtype, dim, face model versions (mismatch ⇒ re-index prompt, as in the extension) |
 
-Storage: IndexedDB (as in the extension) or SQLite (sql.js as NameTag uses; native SQLite if Tauri/native).
+Storage: IndexedDB (as in the extension) or SQLite (sql.js as NameTag uses; native Android SQLite in the chosen native app).
 Vector search: brute-force dot product over a contiguous typed array is fine at N4 sizes
 (2k × 256 floats ≈ 2 MB; 20k ≈ 20 MB), as the extension's design already concluded.
 
@@ -674,7 +674,7 @@ dropped for this device. This is still a hypothesis; §12 is how we test it. Fal
 | Runtime | **Native Kotlin / KMP (D1-E)**; Tauri (D1-B) demoted because of the old system WebViews (§5.0). Reasons: survives memory pressure, runs as a foreground service, can use native ONNX Runtime/XNNPACK for ~2–4x over WASM **[verify]**, gets real file access to internal storage/microSD, and real trash/delete. |
 | Photo source | Photos copied to the tablet or microSD (USB, SD card, or one-off LAN copy). The frame then owns the library. |
 | Voice | Tier-1 grammar recogniser on-device; free-form queries via Whisper-tiny only if latency is acceptable, otherwise typed/tag-picker fallback. |
-| Delete | Move to an app trash folder (D6-B) becomes possible with a Tauri/native app. |
+| Delete | Move to an app trash folder (D6-B) is possible because the app is native Android. |
 
 **Cost of this option:** lower semantic quality than Gemma; first-run indexing takes hours; thermal
 and storage budgeting matter (S6). **Benefit:** one device, no server, no export, fully private.
@@ -707,7 +707,7 @@ Gemma on a 2–5k sample) replaces S1/S5; S3 gains an overnight library-pass tim
 | Risk | Likelihood | Impact | Mitigation |
 | --- | --- | --- | --- |
 | No WebGPU and weak CPU make on-tablet Gemma impractical | **High** | High | Plan baseline D3-C/E; B/C options; spike S1/S2 early. |
-| Silk/WebView lacks camera/mic/permission persistence or voice API | Medium | High | Spike S0; Tauri app (D1-B) or native (D1-C). |
+| Silk/WebView lacks camera/mic/permission persistence or voice API | Medium | High | **Resolved:** S0 done; native Android (D1-E) chosen, so no browser/WebView dependency remains. |
 | Face recognition inaccurate with the 2 MP camera | Medium | Medium | Per-device calibration; stricter consecutive-frame rule; modern embedder (D4-B); setup guidance (distance/light). |
 | STT mishears names | **High** | Medium | Constrained grammar, confirmation step, touch fallback. |
 | Thermal throttling / OOM in long runs | Medium | Medium | Duty-cycled sensing, bounded caches, watchdog reload, soak test. |
@@ -731,8 +731,7 @@ Each spike is short and ends in a recorded number so the decisions in §7/§9 ar
 
 Suggested order (updated 2026-11-13, tablet-first model selection, §7.3.1): **S0 → S1' (tablet gate
 across candidate models, then quality gate = S2) → lock model + equivalence test → S5 (desktop
-bundle import) → S3 → S4 → S6**. S0 decides whether plain Silk, Tauri or native
-app is even possible, so run it first; it is ~1 hour of work.
+bundle import) → S3 → S4 → S6**. S0 (done) decided native Android; it was run first because it decides whether Silk, Tauri or native is even possible.
 
 ### 12.1 Runtime decision record (app platform)
 

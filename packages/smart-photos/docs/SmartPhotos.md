@@ -885,6 +885,33 @@ Free-form search only needs the phrase to be *mostly* right: CLIP tolerates a wr
 
 Defaults are privacy-friendly: camera and microphone are OFF until enabled in Settings. Face data is app-private but **not yet encrypted (deferred to a later phase by decision, section 10)**.
 
+### 13.2 Changing the library: removing and adding photos (behaviour as built, 2026-11-14)
+
+**Removing photos**
+
+| How a photo is removed | What happens |
+| --- | --- |
+| On the frame ("delete this photo" or the Delete button) | Moved to the app's `.trash` folder at once and gone from the slideshow, search and person albums. Its face data is forgotten. Undo works for 10 s; the trashed file is purged after 30 days. |
+| Deleting the file from the frame's photo folder by hand (PC, file manager, `adb`) | The frame does not watch the folder. Nothing changes until the next app start; if the slideshow reaches the missing file first, it skips it (and drops it from the current playlist). At the next start the library is re-read: missing photos leave the library, search and albums. Their old entry stays in the face file but is ignored everywhere. |
+| Removing the original from a phone, USB stick or SD card | No effect on the frame: import copies the photos. |
+
+A person whose photos are all removed stays named (their face samples are stored separately, in `people.json`): walk-up recognition still works, their album is just empty.
+
+**Adding photos**
+
+| How a photo is added | What happens |
+| --- | --- |
+| Settings, Add photos, Choose folder | Copied into the library with the original date; an exact duplicate (same size and date as a photo already in the library) is skipped; the library is refreshed at once and the slideshow includes the new photos. They are then embedded for search (about 0.5 s each, newest first) and scanned for faces; a progress chip shows how far it is. |
+| Photos of people already named | They join those people's albums automatically (matched against the stored face samples); no re-naming is needed. New unfamiliar faces appear as groups on the People screen. |
+| Copying files straight into the frame's photo folder (`adb`, USB) | Noticed only at the next app start, then indexed. |
+| A photo replaced by an edited version (same path, different size or date) | Treated as new: re-embedded and re-scanned for faces. |
+
+**Known limits**
+
+- **No live folder watching:** manual changes to the photo folder need an app restart to show up.
+- **A deleted photo can come back:** the duplicate check compares against the photos currently in the library, so importing the same folder again after deleting a photo on the frame re-adds it (and its old copy stays in the trash until the 30-day purge).
+- **Possible small improvements, not built:** a "Refresh library" button in Settings (re-read the folder on demand, no restart), and a "do not re-import photos I deleted" list built from the trash log.
+
 ## 14. Open questions for you
 
 1. ~~Which Fire HD model and free storage?~~ Answered in §5.0: Fire HD 10 (9th gen), 17 GB free.

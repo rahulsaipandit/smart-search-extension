@@ -24,6 +24,7 @@ class PeopleController(
     private val store: PhotoStore, private val faces: FaceStore, val people: People,
     private val overlay: FaceOverlay, private val toastFn: (String, Long) -> Unit,
     private val onPeopleChanged: () -> Unit, private val showAlbum: (String) -> Unit,
+    private val spell: (String, (String) -> Unit) -> Unit,
 ) {
     private fun toast(t: String, ms: Long = 3500) = toastFn(t, ms)
     private var screen: FrameLayout? = null
@@ -120,9 +121,14 @@ class PeopleController(
                 .setPositiveButton("Save") { _, _ -> tidyName(et.text.toString())?.let(done) }
                 .setNegativeButton("Cancel", null).show()
         }
-        if (existing.isEmpty()) { typed(); return }
+        // A new name can be typed, or spelled out loud letter by letter (the voice recogniser cannot hear a name it has never seen).
+        fun newName() {
+            AlertDialog.Builder(act).setTitle("Give the new name").setItems(arrayOf("Type it", "Spell it out")) { _, w -> if (w == 0) typed() else spell(title, done) }
+                .setNegativeButton("Cancel", null).show()
+        }
+        if (existing.isEmpty()) { newName(); return }
         val items = (existing + "New person...").toTypedArray()
-        AlertDialog.Builder(act).setTitle(title).setItems(items) { _, w -> if (w < existing.size) done(existing[w]) else typed() }
+        AlertDialog.Builder(act).setTitle(title).setItems(items) { _, w -> if (w < existing.size) done(existing[w]) else newName() }
             .setNegativeButton("Cancel", null).show()
     }
 
@@ -153,10 +159,13 @@ class PeopleController(
         bg.execute {
             val live = store.snapshot().mapTo(HashSet()) { it.path }
             val clusters = Clusters.build(faces.all().filter { it.path in live }, people)
-            val thumbs = clusters.map { c -> c.members.take(4).mapNotNull { m -> runCatching { ImagePrep.faceThumb(File(m.path), m, act.dp(96)) }.getOrNull() } }
+            // Thumbnails come from photos only (a video frame has no still to crop); a group seen only in videos cannot be shown, so it is not listed.
+            fun isVideo(f: FaceRec) = f.path.substringAfterLast('.').lowercase() in PhotoStore.VIDEO_EXT
+            val shown = clusters.filter { c -> c.members.any { !isVideo(it) } }
+            val thumbs = shown.map { c -> c.members.filter { !isVideo(it) }.take(4).mapNotNull { m -> runCatching { ImagePrep.faceThumb(File(m.path), m, act.dp(96)) }.getOrNull() } }
             val known = people.all().map { it to photoCount(it) }
-            val scanned = faces.scannedCount(); val total = store.snapshot().count { !it.video }
-            ui.post { if (list === col) render(col, known, clusters, thumbs, scanned, total) }
+            val scanned = faces.scannedCount(); val total = store.snapshot().size
+            ui.post { if (list === col) render(col, known, shown, thumbs, scanned, total) }
         }
     }
 

@@ -545,6 +545,11 @@ and accuracy on the tablet mic.
 | **B. Move to a trash folder** | Original moved under `.trash/` with 30-day retention; "undo" available. | Native app with file access (decided), or a LAN server with write access. Recommended. |
 | **C. Permanent delete** | Remove the file. | Only with explicit settings opt-in; never the default. |
 
+**Decision (2026-11-14): there are no deletion modes.** Delete always means "move to the trash", with the confirmation and undo below. On this
+tablet (Android 9) there is no system recycle bin for an app's own files, so the app's `.trash` folder is used (30-day retention, then purged).
+Where the platform supports a system trash (Android 11 and later, for media in shared storage), the app should use that instead of its own
+folder; this is not built because the photos live in the app's own storage. Hide-only and permanent delete are not offered.
+
 Confirmation flow (all options): on "delete this photo" show a **toast with the thumbnail, a
 countdown (e.g. 8 s), and Confirm / Cancel buttons**; voice "yes/confirm" or "cancel/no" also works;
 no response ⇒ cancel; the photo is paused during the confirmation and an **undo toast** appears
@@ -563,7 +568,7 @@ When the camera sees someone:
 | Situation | Options |
 | --- | --- |
 | One recognised person | Switch to their photos (slow cross-fade); return to ambient after 30–60 s without a face. |
-| Several recognised people | (a) show photos that contain **all** of them, falling back to (b) alternate between them, or (c) prefer the largest/closest face. Make it a setting. |
+| Several recognised people | (a) show photos that contain **all** of them, falling back to (b) alternate between them, or (c) prefer the largest/closest face. **Accepted as built (2026-11-14):** a setting chooses "only photos with all of them" (falls back to any) or "any"; "alternate" is simply a shuffle of their photos. |
 | Unrecognised face | Do nothing visible. Never show "unknown person". |
 | Flapping | Hysteresis: N consecutive wins to enter, M seconds absence to leave. |
 | Privacy of content | Optional per-person "private" tag so an album only appears when *that* person is recognised alone. |
@@ -709,6 +714,10 @@ Gemma on a 2–5k sample) replaces S1/S5; S3 gains an overnight library-pass tim
 - **Biometric data:** face embeddings are biometric identifiers. Store them only on the frame/desktop,
   encrypt at rest where the platform allows, provide **"Delete all face data"**, and enrol only people
   who agreed (the household), never visitors.
+- **Decision (2026-11-14): encryption of face data is deferred to a later phase.** For now `faces.bin` (face embeddings of the library) and
+  `people.json` (names and exemplars) are stored **unencrypted but app-private** (app internal storage, `allowBackup=false`, not readable by
+  other apps on a non-rooted tablet), and can be erased with "Delete all face data". When encryption is added, use the Android Keystore to
+  wrap a key that encrypts both files at rest, and migrate the existing files on first start. The consent screen is a separate, still open item.
 - **Camera/mic transparency:** a persistent on-screen indicator when the camera is analysing and when
   the mic is listening; physical camera cover advice; a "pause sensing" voice command and switch.
   Frames are processed in memory and discarded.
@@ -860,7 +869,18 @@ enrolment is stored app-private and survives restarts. **Voice listening is OFF 
 | **P4 Voice** | Grammar rebuilt from people names; "name the faces", "this is X", "number two is X", "photos of X", "show people", "sound on/off" | Grammar builds; no speech tested | Everything spoken |
 | **P6 Hardening** | Settings screen (persisted), night mode (screen off, camera and mic off), slow drift against burn-in, start on boot, microphone OFF / AUTO / ON, 30-day trash retention | Settings screen, night mode on and off, trash purge | Boot start (needs a reboot); wall-charger and warm-room soak; kiosk lock (needs device-owner or screen pinning by the user) |
 
-Defaults are privacy-friendly: camera and microphone are OFF until enabled in Settings.
+**Added 2026-11-14 (all verified on the tablet unless noted):**
+
+| Feature | What it does | Verified |
+| --- | --- | --- |
+| **Add photos** (Settings) | The system folder picker (USB stick, SD card, any folder), then a copy into the library keeping the original dates; exact duplicates (same size and date) are skipped; refuses to fill the tablet (300 MB kept free); the new photos are then indexed and scanned for faces | Real picker flow ("Added 2 photos"); copy, duplicate skip, nested folder, video, non-photo ignored, dates kept (1,427 to 1,431 items) |
+| **Faces in videos** | A frame about every 2 s (up to 15, within the 30 s cap) through the same face step; repeats removed; videos join person albums and walk-up results. No naming from a playing video; a group seen only in videos is not listed on the People screen | A video cut from a photo of three people appeared for "Charlie and Alpha and Delta" and for Alpha |
+| **Free-form voice search** | Say "search for", then one phrase (about 9 s) with the same Vosk model in open-vocabulary mode; the heard text is shown and searched | Search path verified ("sunset over the mountains"); offline open-vocabulary test on synthetic speech: 8 of 10 phrases exact, 40 of 42 words; not tried with a real voice |
+| **Pin app to screen** (Settings) | Android's screen pinning; the same button unpins | Pinned (PINNED) and unpinned (NONE) |
+
+Free-form search only needs the phrase to be *mostly* right: CLIP tolerates a wrong word or two (for example "vote on the lake" still finds boats), and the heard text is always visible.
+
+Defaults are privacy-friendly: camera and microphone are OFF until enabled in Settings. Face data is app-private but **not yet encrypted (deferred to a later phase by decision, section 10)**.
 
 ## 14. Open questions for you
 

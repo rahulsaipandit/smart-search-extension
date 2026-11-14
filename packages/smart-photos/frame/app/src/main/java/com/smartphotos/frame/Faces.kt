@@ -85,13 +85,16 @@ class FaceIndexer(
     fun start() {
         if (thread != null) return
         thread = Thread {
-            val todo = store.snapshot().filter { !it.video && !faces.has(it) }.sortedByDescending { it.mtime }
+            val todo = store.snapshot().filter { !faces.has(it) }.sortedByDescending { it.mtime }
             var done = 0
             for (p in todo) {
                 if (stop) break
                 try {
-                    val raw = ImagePrep.decodeRaw(File(p.path), 640, 8)
-                    faces.put(p, if (raw == null) emptyList() else find(p.path, raw))
+                    if (p.video) faces.put(p, videoFaces(p.path))
+                    else {
+                        val raw = ImagePrep.decodeRaw(File(p.path), 640, 8)
+                        faces.put(p, if (raw == null) emptyList() else find(p.path, raw))
+                    }
                 } catch (t: Throwable) { android.util.Log.w("FRAME", "faces: skipping ${p.path}: $t"); continue }
                 done++
                 if (done % 25 == 0) { faces.save(); onProgress(done, todo.size) }
@@ -108,7 +111,31 @@ class FaceIndexer(
         }
     }
 
+    /**
+     * Faces in a video: a frame about every [STEP_MS] up to the 30 s playback cap (at most [MAX_FRAMES] frames), each through the same
+     * detect-and-embed step as a photo. The same face in many frames is kept once. Box coordinates belong to the sampled frame, so a
+     * video's faces are for recognition and albums only (no naming from a playing video).
+     */
+    private fun videoFaces(path: String): List<FaceRec> {
+        val r = android.media.MediaMetadataRetriever()
+        try {
+            r.setDataSource(path)
+            val capMs = minOf(r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L, 30_000L)
+            val kept = ArrayList<FaceRec>()
+            var t = 0L; var n = 0
+            while (n < MAX_FRAMES && t <= capMs && !stop && kept.size < 12) {
+                val bmp = r.getFrameAtTime(t * 1000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                t += STEP_MS; n++
+                if (bmp == null) continue
+                for (f in find(path, ImagePrep.rawOf(bmp))) if (kept.none { dot(it.emb, f.emb) > 0.9f } && kept.size < 12) kept.add(f)
+            }
+            return kept
+        } finally { runCatching { r.release() } }
+    }
+
     fun stop() { stop = true; thread?.join(5000) }
+
+    private companion object { const val STEP_MS = 2000L; const val MAX_FRAMES = 15 }
 }
 
 /** A named person: the embeddings of a few good faces ("exemplars") that new faces are compared with. */

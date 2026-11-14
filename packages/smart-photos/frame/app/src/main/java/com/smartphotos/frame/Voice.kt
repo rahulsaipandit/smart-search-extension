@@ -13,7 +13,7 @@ import java.io.File
 /** Fixed commands (docs/SmartPhotos.md §8.2). "show me X" phrases are added from the search vocabulary. */
 val BASE_COMMANDS = listOf(
     "pause", "resume", "next photo", "previous photo", "delete this photo", "yes", "cancel", "undo that",
-    "show everything", "slower", "faster", "sound on", "sound off", "dim the screen", "brighten the screen", "stop listening", "name the faces", "skip", "done", "show people",
+    "show everything", "slower", "faster", "sound on", "sound off", "dim the screen", "brighten the screen", "stop listening", "pause sensing", "search for", "name the faces", "skip", "done", "show people",
 )
 
 /** Words offered after "show me" - the S2 query list plus a few extras. Anything else is rejected by the recogniser, not guessed. */
@@ -26,8 +26,12 @@ val SEARCH_WORDS = listOf(
 /** Offline Vosk recogniser restricted to a closed phrase list (+ `[unk]` so unrelated speech is rejected). */
 class Voice(modelDir: File, phrases: List<String>) {
     private val model: Model
-    @Volatile private var grammar = grammarOf(phrases)
+    /** null = open vocabulary (no grammar): used for one utterance after "search for", where any words must be accepted. */
+    @Volatile private var grammar: String? = grammarOf(phrases)
     private fun grammarOf(p: List<String>) = "[" + (p + "[unk]").joinToString(",") { "\"$it\"" } + "]"
+
+    /** Takes effect the next time [start] is called. */
+    fun setOpen() { grammar = null }
 
     /** Takes effect the next time [start] is called (people were added or renamed, so their names must become recognisable). */
     fun setPhrases(p: List<String>) { grammar = grammarOf(p) }
@@ -47,7 +51,8 @@ class Voice(modelDir: File, phrases: List<String>) {
             if (minBuf <= 0) { if (live === self) live = null; return@Thread }
             val rec = runCatching { AudioRecord(MediaRecorder.AudioSource.MIC, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 4) }.getOrNull()
             if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); if (live === self) live = null; return@Thread }
-            val r = Recognizer(model, 16000f, grammar)
+            val g = grammar
+            val r = if (g == null) Recognizer(model, 16000f) else Recognizer(model, 16000f, g)
             val buf = ShortArray(2000)
             try {
                 rec.startRecording()

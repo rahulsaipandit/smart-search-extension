@@ -130,6 +130,9 @@ object ImagePrep {
 
     class Raw(val w: Int, val h: Int, val px: IntArray)
 
+    /** Raw packed RGB of a bitmap (a video frame); consumes (recycles) it. */
+    fun rawOf(b: Bitmap): Raw = Raw(b.width, b.height, rawRgb(b)).also { b.recycle() }
+
     /** Upright image as raw packed RGB (see [rawRgb]), decoded with the same power-of-two rule as [decode] (maxSide = 0). */
     fun decodeRaw(f: File, minSide: Int, maxSample: Int = 8): Raw? {
         val b = decode(f, minSide, 0, maxSample) ?: return null

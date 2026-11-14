@@ -40,7 +40,7 @@ class MainActivity : Activity() {
     private lateinit var base: File
     private lateinit var store: PhotoStore
     private var clip: ClipEngine? = null
-    private var indexer: Indexer? = null
+    @Volatile private var indexer: Indexer? = null
     private var voice: Voice? = null
     private var micWanted = false
     private lateinit var faces: FaceStore
@@ -78,6 +78,10 @@ class MainActivity : Activity() {
     private lateinit var controls: LinearLayout
     private lateinit var pauseBtn: Button
     private lateinit var micBtn: Button
+    private lateinit var sensingBtn: Button
+    @Volatile private var sensingPaused = false   // "pause sensing": camera and microphone both off until Resume sensing is pressed
+    private var micSilentPaused = false             // the microphone paused itself after a minute with nothing said
+    private var lastSpeechAt = 0L
     private lateinit var deleteBar: LinearLayout
     private lateinit var deleteText: TextView
     private lateinit var undoBar: LinearLayout
@@ -93,6 +97,9 @@ class MainActivity : Activity() {
     private var current: Photo? = null
     private var lastTrashed: Trashed? = null
     private var indexStatus = ""
+    @Volatile private var importStatus = ""
+    @Volatile private var importing = false
+    @Volatile private var faceRescanRequested = false   // an import added photos while the face pass was busy: look once more when it ends
 
     private val tick = Runnable { if (state == State.AMBIENT || state == State.FILTERED) { step(+1) } }
     private val hideControls = Runnable { controls.visibility = View.GONE }
@@ -114,10 +121,10 @@ class MainActivity : Activity() {
         store = PhotoStore(root, filesDir)
         faces = FaceStore(filesDir); peopleStore = People(filesDir)
         buildUi()
-        ctl = PeopleController(this, ui, bg, store, faces, peopleStore, faceOverlay, { t, ms -> toast(t, ms) }, { peopleChanged() }, { name -> search(name) })
+        ctl = PeopleController(this, ui, bg, store, faces, peopleStore, faceOverlay, { t, ms -> toast(t, ms) }, { peopleChanged() }, { name -> search(name) }, { title, done -> startSpelling(title, done) })
         ctl.onClose = { closePeople() }
         settings = Settings(this)
-        settingsScreen = SettingsScreen(this, settings, { settingsChanged() }, { closeSettings() })
+        settingsScreen = SettingsScreen(this, settings, { settingsChanged() }, { closeSettings() }, { startImport() }, { togglePin() })
         intervalMs = settings.intervalSec * 1000L; micMode = settings.micMode; frame.drift = settings.drift
         refreshMicBtn()
         immersive()
@@ -169,6 +176,8 @@ class MainActivity : Activity() {
         r1.addView(pauseBtn, gap())
         r1.addView(button("Everything") { showEverything() }, gap())
         r1.addView(button("Delete", 0xCC8E2A2A.toInt()) { requestDelete() }, gap())
+        sensingBtn = button("Pause sensing") { if (sensingPaused) resumeSensing() else pauseSensing() }
+        r1.addView(sensingBtn, gap())
         r2.addView(button("People") { openPeople() }, gap())
         r2.addView(button("Name faces") { if (ctl.naming) endNaming() else startNamingMode() }, gap())
         micBtn = button("Mic off") { toggleMic() }
@@ -217,6 +226,7 @@ class MainActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); if (hasFocus) immersive() }
 
     private fun showControls() {
+        if (micSilentPaused) { micSilentPaused = false; lastSpeechAt = System.currentTimeMillis(); applyMic() }
         controls.visibility = View.VISIBLE
         ui.removeCallbacks(hideControls); ui.postDelayed(hideControls, 6000)
     }
@@ -234,9 +244,12 @@ class MainActivity : Activity() {
             State.CONFIRM_DELETE -> parts.add("Delete?")
             else -> {}
         }
+        if (importStatus.isNotEmpty()) parts.add(importStatus)
         if (indexStatus.isNotEmpty()) parts.add(indexStatus)
         if (presence?.running == true) parts.add("\u25CF Camera on")
-        if (micWanted) parts.add("\u25CF Mic on")
+        if (micWanted || spelling || dictating) parts.add("\u25CF Mic on")
+        if (sensingPaused) parts.add("Sensing paused") else if (micSilentPaused) parts.add("Mic paused (silence)")
+        if (this::sensingBtn.isInitialized) sensingBtn.text = if (sensingPaused) "Resume sensing" else "Pause sensing"
         chip.text = parts.joinToString("   ·   ")
         chip.visibility = if (parts.isEmpty()) View.GONE else View.VISIBLE
         pauseBtn.text = if (state == State.PAUSED) "Resume" else "Pause"
@@ -264,11 +277,7 @@ class MainActivity : Activity() {
             }
             enterAmbient()
         }
-        val c = clip
-        if (c != null && store.snapshot().any { it.vecs == null }) {
-            indexer = Indexer(store, c, { done, total -> ui.post { indexStatus = if (done < total) "Indexing $done/$total" else ""; refreshChip() } },
-                { ui.post { indexStatus = ""; refreshChip(); toast("Photo search is ready") }; bg.execute { startFaceIndexing() } }).also { it.start() }
-        } else startFaceIndexing()
+        startIndexing()
         if (debuggable) debugHooks()
         ui.post(object : Runnable { override fun run() { if (destroyed) return; applyMic(); if (++tickCount % 30 == 1) checkNight()
                 if (state == State.FILTERED && !presenceFilter && System.currentTimeMillis() - filteredSince > 10 * 60_000L) { enterAmbient(); toast("Back to everything") }
@@ -482,11 +491,25 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ walk-up detection, settings, night mode
 
+    /** "Pause sensing": camera and microphone both off (privacy), until Resume sensing is pressed on the touch controls. */
+    private fun pauseSensing() {
+        sensingPaused = true
+        presence?.stop(); applyMic(); refreshChip()
+        log("SENSING paused")
+        toast("Sensing paused - camera and microphone are off. Touch the screen and press Resume sensing.", 7000)
+    }
+
+    private fun resumeSensing() {
+        sensingPaused = false; micSilentPaused = false; lastSpeechAt = System.currentTimeMillis()
+        log("SENSING resumed")
+        applyPresence(); applyMic(); refreshChip(); toast("Sensing resumed")
+    }
+
     private fun userAction() { manualOverride = true; presenceFilter = false }
 
     /** Starts or stops the camera loop to match the setting. The camera runs only while the app is visible, not at night, and someone is named. */
     private fun applyPresence() {
-        val want = settings.presence && visible && !nightActive
+        val want = settings.presence && visible && !nightActive && !sensingPaused
         if (!want) { presence?.stop(); refreshChip(); return }
         if (peopleStore.all().isEmpty()) { toast("Walk-up detection needs at least one named person - open People", 5000); return }
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
@@ -576,16 +599,73 @@ class MainActivity : Activity() {
 
     private fun snoozeNight() { nightSnoozeUntil = System.currentTimeMillis() + 10 * 60_000L; exitNight() }
 
+    // ------------------------------------------------------------------ indexing, importing, pinning
+
+    /** Embeds every photo without a vector (resumable), then the face pass. Safe to call again: it does nothing while the indexer is running. */
+    @Synchronized private fun startIndexing() {
+        val c = clip
+        if (c != null && store.snapshot().any { it.vecs == null }) {
+            if (indexer?.isRunning == true) return
+            indexer = Indexer(store, c, { done, total -> ui.post { indexStatus = if (done < total) "Indexing $done/$total" else ""; refreshChip() } },
+                { ui.post { indexStatus = ""; refreshChip(); toast("Photo search is ready") }; bg.execute { startFaceIndexing() } }).also { it.start() }
+        } else startFaceIndexing()
+    }
+
+    private val REQ_IMPORT = 10
+
+    /** "Add photos": the system folder picker (a USB stick, an SD card, any folder), then a copy into the library. */
+    private fun startImport() {
+        if (importing) { toast("An import is already running"); return }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_IMPORT)
+        } catch (t: Throwable) { toast("This tablet has no folder picker", 5000) }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_IMPORT && resultCode == RESULT_OK) data?.data?.let { uri -> runImport { Importer.fromTree(this, uri) } }
+    }
+
+    private fun runImport(source: () -> List<ImportItem>) {
+        if (importing) return
+        importing = true; importStatus = "Reading folder..."; refreshChip()
+        Thread {
+            val r = try {
+                Importer.run(source(), store, File(store.root, "Imported")) { d, t -> ui.post { importStatus = "Importing $d/$t"; refreshChip() } }
+            } catch (t: Throwable) { ImportResult(0, 0, 0, "Could not read that folder: $t") }
+            store.rescan()
+            log("IMPORT copied=${r.copied} duplicates=${r.duplicates} failed=${r.failed} error=${r.error}; library now ${store.count()}")
+            ui.post {
+                importing = false; importStatus = ""; refreshChip()
+                toast(r.error ?: "Added ${r.copied} photos (${r.duplicates} already here${if (r.failed > 0) ", ${r.failed} could not be copied" else ""})", 8000)
+                if (r.copied > 0 && (state == State.AMBIENT || playlist.isEmpty())) { state = State.AMBIENT; enterAmbient() }
+            }
+            if (r.copied > 0 && !destroyed) { faceRescanRequested = true; startIndexing() }
+        }.also { it.name = "import" }.start()
+    }
+
+    /** Pins the app to the screen (Android's own screen pinning); pressing again unpins. Leaving by hand: hold Back and Overview together. */
+    private fun togglePin() {
+        val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        runCatching {
+            if (am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE) { stopLockTask(); toast("Unpinned") }
+            else { startLockTask(); toast("Pinned. To leave: hold Back and Overview together. If nothing happened, turn on Screen pinning in the tablet's Settings, Security.", 9000) }
+        }.onFailure { toast("Could not pin: $it", 6000) }
+    }
+
     // ------------------------------------------------------------------ faces and people
 
     /** After the search index: find the faces in every photo (resumable), then free the face models again. */
-    private fun startFaceIndexing() {
-        if (faceIndexer != null || store.snapshot().none { !it.video && !faces.has(it) }) return
+    @Synchronized private fun startFaceIndexing() {
+        if (faceIndexer != null || store.snapshot().none { !faces.has(it) }) return
         val fp = runCatching { FacePipeline(assets.open("yunet.onnx").readBytes(), assets.open("sface.onnx").readBytes()) }.getOrNull() ?: return
         facePipeline = fp
         faceIndexer = FaceIndexer(store, faces, fp,
             { done, total -> ui.post { indexStatus = if (done < total) "Finding faces $done/$total" else ""; refreshChip() } },
-            { ui.post { indexStatus = ""; refreshChip(); toast("Faces found - open People to name them") }; facePipeline?.close(); facePipeline = null; faceIndexer = null }).also { it.start() }
+            { ui.post { indexStatus = ""; refreshChip(); toast("Faces found - open People to name them") }; facePipeline?.close(); facePipeline = null; faceIndexer = null
+                if (faceRescanRequested) { faceRescanRequested = false; bg.execute { startFaceIndexing() } } }).also { it.start() }
     }
 
     /** People were added, renamed or removed: voice must learn the new names, and "who is in which photo" is rebuilt on demand. */
@@ -618,7 +698,7 @@ class MainActivity : Activity() {
                 if (rest.isNotEmpty() && c != null && cand.isNotEmpty())
                     runCatching { store.search(c.embedText(rest), 60, 0.08f, 0.15f, cand.map { it.path }.toSet()).map { it.first } }.getOrDefault(emptyList())
                 else cand.shuffled().take(300)
-            log("PEOPLE '$names' rest='$rest' -> ${res.size} photos (candidates ${cand.size}, all-of=$all, faces scanned ${faces.scannedCount()})")
+            log("PEOPLE '$names' rest='$rest' -> ${res.size} photos, ${res.count { it.video }} videos (candidates ${cand.size}, all-of=$all, faces scanned ${faces.scannedCount()})")
             ui.post {
                 if (destroyed) return@post
                 val scanning = if (indexStatus.startsWith("Finding faces")) " (faces are still being scanned)" else ""
@@ -684,16 +764,132 @@ class MainActivity : Activity() {
             val blank = IntArray(640 * 480) { 0xFF202020.toInt() }
             repeat(3) { pr.debugInject(blank, 640, 480); Thread.sleep(3000) }
         }.start() }, 5000)
+        intent.getStringExtra("import_dir")?.let { dir -> ui.postDelayed({ runImport { Importer.fromDir(File(dir)) } }, 3000) }
         if (intent.getBooleanExtra("clearpeople", false)) { peopleStore.clear(); log("people cleared (faces kept)") }
         if (intent.getBooleanExtra("people", false)) ui.postDelayed({ openPeople() }, 2500)
         if (intent.hasExtra("presence_on")) { settings.presence = intent.getBooleanExtra("presence_on", false); ui.post { settingsChanged() } }
         if (intent.hasExtra("micmode")) { settings.micMode = intent.getIntExtra("micmode", 0); ui.post { micMode = settings.micMode; refreshMicBtn(); applyMic() } }
+        if (intent.hasExtra("silence")) { settings.silenceSec = intent.getIntExtra("silence", 60) }
+        intent.getStringExtra("dictate")?.let { t -> ui.postDelayed({ dictating = true; finishDictation(t) }, 4000) }
+        if (intent.hasExtra("say")) ui.postDelayed({ onVoice(intent.getStringExtra("say") ?: "") }, 4000)
         if (intent.hasExtra("fakehour")) { fakeHour = intent.getIntExtra("fakehour", -1); ui.post { checkNight() } }
         if (intent.getBooleanExtra("settings", false)) ui.postDelayed({ openSettings() }, 2500)
         if (intent.getBooleanExtra("clusters", false)) bg.execute {
             val cl = Clusters.build(faces.all(), peopleStore)
             log("CLUSTERS ${cl.size} groups from ${faces.all().size} faces in ${faces.scannedCount()} photos; sizes ${cl.take(12).joinToString { "${it.members.size}/${it.photos}p" }}")
         }
+    }
+
+    // ------------------------------------------------------------------ free-form voice search ("search for ...")
+
+    @Volatile private var dictating = false
+    private val NOISE_WORDS = setOf("the", "and", "huh", "uh", "um", "hmm", "oh", "yeah")
+    private val dictationTimeout = Runnable { finishDictation("") }
+
+    /**
+     * Two-stage voice search: the closed command list cannot hold every word, so after "search for" the same Vosk model listens once with no
+     * grammar (any words) for about 9 seconds. What was heard is shown on screen and searched; the CLIP search tolerates a wrong word or two.
+     */
+    private fun startDictation() {
+        if (dictating || spelling) return
+        dictating = true; refreshChip()
+        toast("Listening - say what to search for, like \u201Cred car at night\u201D", 9000)
+        ui.removeCallbacks(dictationTimeout); ui.postDelayed(dictationTimeout, 9000)
+        bg.execute {
+            val v = voice ?: return@execute
+            v.stop(); v.setOpen()
+            v.start { text -> if (text.split(" ").any { it.length >= 3 && it !in NOISE_WORDS }) ui.post { finishDictation(text) } }   // ignore stray noise words, keep listening
+        }
+    }
+
+    private fun finishDictation(text: String) {
+        if (!dictating) return
+        dictating = false; ui.removeCallbacks(dictationTimeout)
+        bg.execute { voice?.let { v -> v.stop(); v.setPhrases(voicePhrases()); if (micWanted) v.start { t -> ui.post { onVoice(t) } } } }
+        refreshChip()
+        val q = text.trim()
+        if (q.isEmpty()) { toast("Did not catch that - say \u201Csearch for\u201D and try again", 5000); return }
+        log("DICTATED '$q'")
+        toast("Searching for \u201C$q\u201D", 6000)
+        search(q)
+    }
+
+    // ------------------------------------------------------------------ spelling a new name out loud
+
+    @Volatile private var spelling = false
+    private var spellDialog: android.app.AlertDialog? = null
+    private var spellEdit: EditText? = null
+    private var spellDone: ((String) -> Unit)? = null
+    private val SPELL_WORDS = ('a'..'z').map { it.toString() } + listOf("space", "back", "clear", "done", "cancel")
+
+    /**
+     * "Spell it out": the microphone listens for single letters only (plus space / back / clear / done / cancel), and the name builds up in an
+     * editable box, so a misheard letter can be fixed by saying "back" or by tapping into the box. Works even while the microphone mode is OFF
+     * (the chip shows the microphone is on) and hands the microphone back when the dialog closes.
+     */
+    private fun startSpelling(title: String, done: (String) -> Unit) {
+        if (spelling) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            toast("Please allow the microphone, then choose \"Spell it out\" again", 5000); requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 2); return
+        }
+        spelling = true; spellDone = done
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), dp(8)) }
+        val et = EditText(this).apply {
+            textSize = 32f; typeface = Typeface.MONOSPACE; gravity = Gravity.CENTER; setSingleLine(); hint = "say the letters"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        }
+        spellEdit = et
+        col.addView(et)
+        col.addView(TextView(this).apply {
+            text = "Say each letter, like “r  a  h  u  l”.\nSay “space” between words, “back” to remove the last letter, “clear” to start again, “done” to save."
+            textSize = 15f; setPadding(0, dp(12), 0, 0)
+        })
+        val d = android.app.AlertDialog.Builder(this).setTitle("$title  -  spell the name").setView(col)
+            .setPositiveButton("Save", null).setNeutralButton("Clear", null).setNegativeButton("Cancel", null).create()
+        d.setOnDismissListener { if (spelling) finishSpelling(false) }
+        d.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        d.show(); spellDialog = d
+        d.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener { finishSpelling(true) }
+        d.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener { et.setText("") }
+        refreshChip()
+        bg.execute {
+            val v = voice ?: run {
+                val dir = File(File(base, "models"), "vosk-model-small-en-us-0.15")
+                if (!dir.exists()) { ui.post { toast("Voice model missing - type the name instead", 5000); finishSpelling(false) }; return@execute }
+                Voice(dir, voicePhrases()).also { voice = it }
+            }
+            v.stop(); v.setPhrases(SPELL_WORDS)
+            v.start { text -> ui.post { onSpell(text) } }
+        }
+    }
+
+    private fun onSpell(text: String) {
+        val et = spellEdit ?: return
+        if (!spelling) return
+        log("SPELL '$text'")
+        for (w in text.split(" ")) when (w) {
+            "space" -> et.append(" ")
+            "back" -> et.text?.let { if (it.isNotEmpty()) it.delete(it.length - 1, it.length) }
+            "clear" -> et.setText("")
+            "done" -> { finishSpelling(true); return }
+            "cancel" -> { finishSpelling(false); return }
+            else -> if (w.length == 1 && w[0] in 'a'..'z') et.append(w)
+        }
+        et.setSelection(et.text?.length ?: 0)
+    }
+
+    private fun finishSpelling(save: Boolean) {
+        if (!spelling) return
+        spelling = false
+        val name = tidyName(spellEdit?.text?.toString())
+        val cb = spellDone; spellDone = null; spellEdit = null
+        spellDialog?.let { spellDialog = null; it.dismiss() }
+        // Give the microphone back: normal grammar and, if it was on before, the normal listener.
+        bg.execute {
+            voice?.let { v -> v.stop(); v.setPhrases(voicePhrases()); if (micWanted) v.start { text -> ui.post { onVoice(text) } } }
+        }
+        refreshChip()
+        if (save) { if (name != null) cb?.invoke(name) else toast("No letters heard - nothing saved") }
     }
 
     // ------------------------------------------------------------------ voice
@@ -710,9 +906,20 @@ class MainActivity : Activity() {
 
     /** Starts or stops the microphone to match the mode. Cheap; called every second. */
     private fun applyMic() {
+        if (spelling || dictating) return   // the microphone belongs to the spelling dialog / the one-phrase search until it closes
         val p = presence
-        val want = visible && !nightActive && (micMode == 2 || (micMode == 1 && p != null && p.running && System.currentTimeMillis() - p.lastFaceAt < 5000))
+        val now = System.currentTimeMillis()
+        val faceNow = p != null && p.running && now - p.lastFaceAt < 5000
+        if (micMode == 1 && !faceNow) micSilentPaused = false          // AUTO: when somebody walks up again the microphone listens again
+        var want = visible && !nightActive && !sensingPaused && !micSilentPaused && (micMode == 2 || (micMode == 1 && faceNow))
+        if (want && !micWanted) lastSpeechAt = now                      // the silence clock starts when listening starts
+        if (want && micWanted && settings.silenceSec > 0 && now - lastSpeechAt > settings.silenceSec * 1000L) {
+            micSilentPaused = true; want = false
+            log("MIC paused after ${settings.silenceSec} s of silence")
+            toast("Microphone paused - nothing was said. Touch the screen to listen again.", 6000)
+        }
         if (want != micWanted) setMic(want, quiet = true)
+        refreshChip()
     }
 
     private fun setMic(on: Boolean, quiet: Boolean = false) {
@@ -743,6 +950,8 @@ class MainActivity : Activity() {
 
     private fun onVoice(text: String) {
         log("VOICE '$text' (state=$state)")
+        lastSpeechAt = System.currentTimeMillis()
+        if (text == "pause sensing") { pauseSensing(); return }
         if (ctl.screenOpen || settingsScreen.isOpen || nightActive) { if (text == "stop listening") { micMode = 0; settings.micMode = 0; refreshMicBtn(); applyMic() }; return }
         if (state == State.CONFIRM_DELETE) {   // while a delete is pending only yes / cancel count
             when { text.contains("yes") -> confirmDelete(); text.contains("cancel") -> cancelDelete("Delete cancelled") }
@@ -758,6 +967,7 @@ class MainActivity : Activity() {
             text == "show everything" -> showEverything()
             text == "slower" -> { intervalMs = (intervalMs * 3 / 2).coerceAtMost(60_000); settings.intervalSec = (intervalMs / 1000).toInt(); toast("Slower: ${intervalMs / 1000} s per photo") }
             text == "faster" -> { intervalMs = (intervalMs * 2 / 3).coerceAtLeast(2_000); settings.intervalSec = (intervalMs / 1000).toInt(); toast("Faster: ${intervalMs / 1000} s per photo") }
+            text == "search for" -> startDictation()
             text == "name the faces" -> startNamingMode()
             text == "done" -> if (ctl.naming) endNaming()
             text == "skip" -> if (ctl.naming) toast("Skipped - tap a face to name it later")

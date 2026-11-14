@@ -49,6 +49,13 @@ class PhotoStore(val root: File, private val dataDir: File) {
                 }
             }
         }
+        scanDisk(known)
+    }
+
+    /** Looks at the folder again (after an import): files already known keep their vectors, new files are unindexed, vanished files are dropped. */
+    fun rescan() = scanDisk(synchronized(lock) { photos.associateBy { it.path } })
+
+    private fun scanDisk(known: Map<String, Photo>) {
         val found = ArrayList<Photo>()
         root.mkdirs()
         root.walkTopDown().onEnter { !it.name.startsWith(".") || it == root }.filter { it.isFile && it.extension.lowercase() in (IMAGE_EXT + VIDEO_EXT) }.forEach { f ->
@@ -134,6 +141,7 @@ class PhotoStore(val root: File, private val dataDir: File) {
 class Indexer(private val store: PhotoStore, private val clip: ClipEngine, private val onProgress: (done: Int, total: Int) -> Unit, private val onFinished: () -> Unit) {
     @Volatile private var stop = false
     private var thread: Thread? = null
+    val isRunning: Boolean get() = thread?.isAlive == true
 
     fun start() {
         if (thread != null) return

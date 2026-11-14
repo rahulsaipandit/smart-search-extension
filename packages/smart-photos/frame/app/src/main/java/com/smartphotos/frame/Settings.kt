@@ -27,6 +27,8 @@ class Settings(ctx: Context) {
     var bootStart: Boolean get() = bool("boot", false); set(v) { sp.edit().putBoolean("boot", v).apply() }
     var drift: Boolean get() = bool("drift", true); set(v) { sp.edit().putBoolean("drift", v).apply() }
     /** When several known people are in view: true = only photos containing all of them (falls back to any). */
+    /** The microphone pauses after this many seconds with no recognised command (a touch, or a face coming back in AUTO, wakes it). */
+    var silenceSec: Int get() = int("silence", 60); set(v) { sp.edit().putInt("silence", v.coerceIn(15, 600)).apply() }
     var allOfThem: Boolean get() = bool("allOf", true); set(v) { sp.edit().putBoolean("allOf", v).apply() }
 
     /** True if [hour] (0..23) is inside the night window (which may wrap past midnight). */
@@ -45,7 +47,10 @@ class BootReceiver : BroadcastReceiver() {
 }
 
 /** A plain full-screen list of settings with big +/- and toggle buttons. */
-class SettingsScreen(private val act: Activity, private val s: Settings, private val onChanged: () -> Unit, private val onClose: () -> Unit) {
+class SettingsScreen(
+    private val act: Activity, private val s: Settings, private val onChanged: () -> Unit, private val onClose: () -> Unit,
+    private val onImport: () -> Unit, private val onPin: () -> Unit,
+) {
     private var screen: FrameLayout? = null
     private var host: FrameLayout? = null
     val isOpen: Boolean get() = screen != null
@@ -87,6 +92,7 @@ class SettingsScreen(private val act: Activity, private val s: Settings, private
 
         stepper("Seconds per photo", "How long each photo stays on screen", s.intervalSec, " s", 1) { s.intervalSec = it }
         toggle("Walk-up detection (camera)", "Shows a person's photos when the camera sees them. A camera light appears on screen while it runs. Needs named people.", s.presence) { s.presence = it }
+        stepper("Pause the microphone after silence", "Seconds with no command heard; touch the screen to listen again", s.silenceSec, " s", 15) { s.silenceSec = it }
         stepper("Back to everything after", "Seconds without seeing a known person", s.leaveSec, " s", 10) { s.leaveSec = it }
         toggle("Several people: only photos with all of them", "Off: alternate between their photos", s.allOfThem) { s.allOfThem = it }
         row("Microphone", "Auto listens only while someone is in front of the camera", act.uiButton(arrayOf("Off", "Auto", "On")[s.micMode]) { s.micMode = s.micMode + 1; changed() })
@@ -95,5 +101,7 @@ class SettingsScreen(private val act: Activity, private val s: Settings, private
         stepper("Night ends", "", s.nightEnd, ":00", 1) { s.nightEnd = it }
         toggle("Slow drift", "Moves the picture a little over time so a static photo cannot burn in", s.drift) { s.drift = it }
         toggle("Start when the tablet boots", "", s.bootStart) { s.bootStart = it }
+        row("Add photos", "Copy photos and videos from a USB stick, SD card or any folder into the frame", act.uiButton("Choose folder", 0xFF2563EB.toInt()) { onImport() })
+        row("Pin app to screen", "Keeps the frame on screen so it cannot be left by accident. To leave: hold Back and Overview together", act.uiButton("Pin / unpin") { onPin() })
     }
 }

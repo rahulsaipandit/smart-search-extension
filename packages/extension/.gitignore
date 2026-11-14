@@ -7,3 +7,4 @@ src/**/*.js
 !src/entrypoints/diff-tool/main.js
 !src/entrypoints/diff-tool/diffLogic.js
 !src/entrypoints/diff-tool/diffLogic.test.js
+!src/entrypoints/welcome/welcome.js

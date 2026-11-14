@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<!--
+  Generic first-install welcome page, shared by every extension. It contains no product
+  name or icon path: welcome.js fills in the name (`data-ext-name`), the title and the
+  logo (`#extLogo`, `#toolbarIcon`) from the manifest at runtime.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome</title>
+  <style>
+    :root {
+      --bg: #f6f7fb; --card: #ffffff; --text: #1d2130; --muted: #5d6475;
+      --accent: #2f5bd8; --ok: #1f9d55; --line: #e3e6ee;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #14171f; --card: #1f2430; --text: #f2f3f5; --muted: #a3a9b6; --line: #2f3545; --ok: #37d67a; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { max-width: 640px; margin: 0 auto; padding: 72px 16px 48px; }
+    h1 { font-size: 26px; margin: 0 0 6px; display: flex; align-items: center; gap: 12px; }
+    h1 img { width: 40px; height: 40px; }
+    .lead { color: var(--muted); margin: 0 0 28px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; margin-bottom: 16px; }
+    .card h2 { font-size: 17px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
+    .num { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff;
+      display: inline-flex; align-items: center; justify-content: center; font-size: 14px; flex: 0 0 auto; }
+    .card.done .num { background: var(--ok); }
+    ol { margin: 0; padding-left: 20px; }
+    li { margin: 4px 0; }
+    .glyph { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px;
+      border: 1px solid var(--line); border-radius: 6px; padding: 0 4px; vertical-align: middle; font-size: 15px; }
+    .glyph img { width: 18px; height: 18px; }
+    .status { margin-top: 12px; font-weight: 600; }
+    .status.no { color: var(--muted); }
+    .status.yes { color: var(--ok); }
+    kbd { font: 600 14px/1 ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-bottom-width: 2px;
+      border-radius: 6px; padding: 4px 8px; background: var(--bg); }
+    button { font: inherit; border-radius: 8px; padding: 9px 16px; cursor: pointer; border: 1px solid var(--accent);
+      background: var(--accent); color: #fff; font-weight: 600; }
+    button.secondary { background: transparent; color: var(--accent); }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+    .hidden { display: none !important; }
+    .note { color: var(--muted); font-size: 13px; margin-top: 8px; }
+    .shortcuts { list-style: none; padding: 0; margin: 8px 0 0; }
+    .shortcuts li { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 6px 0; }
+    .shortcuts .unset { color: var(--muted); font-size: 13px; }
+    /* The pointer at the top-right corner of the page: the toolbar (where the
+       Extensions button and the pinned icon live) is just above it. */
+    #pointer { position: fixed; top: 6px; right: 24px; display: flex; flex-direction: column; align-items: flex-end;
+      pointer-events: none; z-index: 10; }
+    #pointer .arrow { font-size: 44px; line-height: 1; color: var(--accent); animation: bob 1.1s ease-in-out infinite; }
+    #pointer .label { margin-top: 4px; background: var(--accent); color: #fff; border-radius: 8px; padding: 6px 10px;
+      font-size: 13px; font-weight: 600; max-width: 260px; text-align: right; }
+    #pointer.pinned .label { background: var(--ok); }
+    #pointer.pinned .arrow { color: var(--ok); }
+    @keyframes bob { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(4px, -8px); } }
+    @media (prefers-reduced-motion: reduce) { #pointer .arrow { animation: none; } }
+  </style>
+</head>
+<body>
+  <div id="pointer" aria-hidden="true">
+    <div class="arrow">&#8599;</div>
+    <div class="label" id="pointerLabel">Click the Extensions button (puzzle piece) up here</div>
+  </div>
+
+  <main>
+    <h1><img id="extLogo" class="hidden" alt=""><span><span data-ext-name>This extension</span> is installed</span></h1>
+    <p class="lead">Two quick steps so you can always find it.</p>
+
+    <section class="card" id="stepPin">
+      <h2><span class="num" id="pinNum">1</span>Pin it to your toolbar</h2>
+      <ol>
+        <li>At the top right of your browser, click the Extensions button <span class="glyph" title="Extensions">&#129513;</span>.</li>
+        <li>Find <strong data-ext-name>this extension</strong> in the list and click the pin <span class="glyph" title="Pin">&#128204;</span> next to it.</li>
+      </ol>
+      <div class="status no" id="pinStatus">Not pinned yet. This page updates as soon as you pin it.</div>
+      <div class="status yes hidden" id="pinDone">
+        Pinned. It is this icon in your toolbar:
+        <span class="glyph"><img id="toolbarIcon" alt="Toolbar icon"></span>
+      </div>
+      <div class="note hidden" id="pinUnknown">Your browser cannot report whether it is pinned. If you can see the icon in your toolbar, you are done.</div>
+    </section>
+
+    <section class="card" id="stepOpen">
+      <h2><span class="num">2</span>Open it</h2>
+      <p style="margin:0">Click the icon in your toolbar, or use the button below.</p>
+      <div class="row">
+        <button type="button" id="btnOpen">Open <span data-ext-name>it</span></button>
+      </div>
+      <div class="note hidden" id="openFallback">The browser did not allow opening it from here. Click the icon in your toolbar instead.</div>
+      <div class="hidden" id="shortcutsBlock">
+        <p style="margin:16px 0 0">Keyboard shortcuts from any tab:</p>
+        <ul class="shortcuts" id="shortcutList"></ul>
+      </div>
+      <div class="row">
+        <button type="button" class="secondary" id="btnShortcuts">Change shortcuts</button>
+      </div>
+      <div class="note">Another extension may already use the same keys; a shortcut that shows "not set" can be assigned there.</div>
+    </section>
+
+    <div class="row">
+      <button type="button" class="secondary" id="btnDismiss">Don't show this again</button>
+    </div>
+  </main>
+
+  <script type="module" src="./welcome.js"></script>
+</body>
+</html>

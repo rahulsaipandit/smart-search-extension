@@ -1,0 +1,33 @@
+{
+    "name": "@page-agent/business-logic",
+    "private": true,
+    "version": "1.12.4",
+    "type": "module",
+    "main": "./src/index.ts",
+    "types": "./src/index.ts",
+    "exports": {
+        ".": {
+            "types": "./src/index.ts",
+            "default": "./src/index.ts"
+        },
+        "./chrome-extension-ranking": {
+            "types": "./src/chromeExtensionRanking/index.ts",
+            "default": "./src/chromeExtensionRanking/index.ts"
+        },
+        "./digital-marketing-pro": {
+            "types": "./src/digitalMarketingPro/index.ts",
+            "default": "./src/digitalMarketingPro/index.ts"
+        }
+    },
+    "description": "Product logic shared by every surface: Chrome Web Store ranking and Digital Marketing Pro (store listing audits, keyword analysis, content generation). No chrome.* or DOM.",
+    "license": "MIT",
+    "dependencies": {
+        "@page-agent/llms": "1.12.4"
+    },
+    "peerDependencies": {
+        "zod": "^3.25.0 || ^4.0.0"
+    },
+    "devDependencies": {
+        "zod": "^4.5.1"
+    }
+}

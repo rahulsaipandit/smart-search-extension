@@ -1,0 +1,21 @@
+{
+    "extends": "../../../tsconfig.base.json",
+    "compilerOptions": {
+        "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tsbuildinfo",
+        // A consumer that is not an npm workspace (the Expo app, GuideAxon) does not link @page-agent/* into node_modules,
+        // so map it to the sources, as that app's babel.config.js and tsconfig.json do. In this monorepo the workspace
+        // links resolve to the same files. Pulling those sources in needs composite off (TS6307) and a rootDir that
+        // contains them (TS6059): llms and storage-suite are siblings of this package, so the parent folder.
+        "composite": false,
+        "rootDir": "..",
+        "paths": {
+            "@page-agent/llms": ["../llms/src"],
+            "@page-agent/storage-suite/secure-storage": ["../storage-suite/src/storage/SecureStorage"],
+            "@page-agent/storage-suite": ["../storage-suite/src"]
+        }
+    },
+    "include": ["src/**/*.ts"],
+    // The mobile client needs React Native and Node types that are not installed for a package check, and its tests use jest
+    // globals; the app's own typecheck covers them (see packages/cognitive-brain/docs/AdoptingCognitiveBrainAndBrowser.md, 4.2).
+    "exclude": ["dist", "node_modules", "src/native-mcp-client"]
+}

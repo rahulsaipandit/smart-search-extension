@@ -1,0 +1,23 @@
+{
+    "name": "@page-agent/access-policy",
+    "private": true,
+    "version": "1.12.4",
+    "type": "module",
+    "main": "./src/index.ts",
+    "types": "./src/index.ts",
+    "exports": {
+        ".": {
+            "types": "./src/index.ts",
+            "default": "./src/index.ts"
+        },
+        "./dom": {
+            "types": "./src/dom.ts",
+            "default": "./src/dom.ts"
+        }
+    },
+    "description": "Fail-closed tab/host access policy engine (allow/deny lists and content heuristics). Platform-neutral; DOM snapshotting lives behind the ./dom subpath.",
+    "license": "MIT",
+    "scripts": {
+        "test": "vitest run"
+    }
+}

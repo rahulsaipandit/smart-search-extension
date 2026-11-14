@@ -12,7 +12,7 @@ export default defineConfig({
 		alias: [
 			{ find: '@', replacement: path.resolve(__dirname, 'src') },
 			// Exact match so subpath imports fall through to real node_modules resolution.
-			{ find: /^@page-agent\/llms$/, replacement: path.resolve(__dirname, '../llms/src/index.ts') },
+			{ find: /^@page-agent\/llms$/, replacement: path.resolve(__dirname, '../cognitive-brain/llms/src/index.ts') },
 		],
 	},
 })

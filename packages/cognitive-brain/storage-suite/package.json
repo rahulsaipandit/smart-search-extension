@@ -1,0 +1,101 @@
+{
+    "name": "@page-agent/storage-suite",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Cross-platform storage, vector store and embedding layer (web: IndexedDB + Orama; native: op-sqlite, MMKV, expo-file-system). Used by the mobile app; the web build must bundle everything, with no remote code.",
+    "type": "module",
+    "main": "./src/index.ts",
+    "types": "./src/index.ts",
+    "exports": {
+        ".": {
+            "types": "./src/index.ts",
+            "default": "./src/index.ts"
+        },
+        "./embeddings": {
+            "types": "./src/embeddings/index.ts",
+            "default": "./src/embeddings/index.ts"
+        },
+        "./storage": {
+            "types": "./src/storage/index.ts",
+            "default": "./src/storage/index.ts"
+        },
+        "./secure-storage": {
+            "types": "./src/storage/SecureStorage.ts",
+            "default": "./src/storage/SecureStorage.ts"
+        },
+        "./opfs": {
+            "types": "./src/storage/OPFSStorage.web.ts",
+            "default": "./src/storage/OPFSStorage.web.ts"
+        },
+        "./file-store": {
+            "types": "./src/storage/NamespacedFileStore.ts",
+            "default": "./src/storage/NamespacedFileStore.ts"
+        }
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@orama/orama": "^3.1.1",
+        "browser-fs-access": "^0.35.0",
+        "idb": "^8.0.3",
+        "idb-keyval": "^6.2.1"
+    },
+    "peerDependencies": {
+        "@huggingface/transformers": "^4.2.0",
+        "@op-engineering/op-sqlite": "*",
+        "@react-native-async-storage/async-storage": "*",
+        "expo-document-picker": "*",
+        "expo-file-system": "*",
+        "expo-screen-orientation": "*",
+        "expo-secure-store": "*",
+        "expo-sharing": "*",
+        "expo-speech-recognition": "*",
+        "llama.rn": "*",
+        "react-native": "*",
+        "react-native-mime-types": "*",
+        "react-native-mmkv": "*"
+    },
+    "peerDependenciesMeta": {
+        "@huggingface/transformers": {
+            "optional": true
+        },
+        "@op-engineering/op-sqlite": {
+            "optional": true
+        },
+        "@react-native-async-storage/async-storage": {
+            "optional": true
+        },
+        "expo-document-picker": {
+            "optional": true
+        },
+        "expo-file-system": {
+            "optional": true
+        },
+        "expo-screen-orientation": {
+            "optional": true
+        },
+        "expo-secure-store": {
+            "optional": true
+        },
+        "expo-sharing": {
+            "optional": true
+        },
+        "expo-speech-recognition": {
+            "optional": true
+        },
+        "llama.rn": {
+            "optional": true
+        },
+        "react-native": {
+            "optional": true
+        },
+        "react-native-mime-types": {
+            "optional": true
+        },
+        "react-native-mmkv": {
+            "optional": true
+        }
+    }
+}

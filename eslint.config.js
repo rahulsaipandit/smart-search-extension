@@ -8,7 +8,7 @@ export default defineConfig([
 	globalIgnores([
 		'**/dist',
 		'**/node_modules',
-		'packages/*/src/components/ui',
+		'packages/**/src/components/ui',
 		'**/.wxt',
 		'**/.output',
 	]),
@@ -59,5 +59,17 @@ export default defineConfig([
 			'@eslint-react/no-array-index-key': 'off',
 			'@eslint-react/dom-no-dangerously-set-innerhtml': 'off',
 		},
+	},
+	{
+		// Native files and tool configs are not in any package tsconfig, so lint them without type info.
+		files: [
+			'packages/cognitive-brain/*/vitest.config.ts',
+			'packages/cognitive-brain/*/benchmarks/**/*.ts',
+			'packages/cognitive-brain/**/*.native.ts',
+			'packages/cognitive-brain/core/src/native-mcp-client/**/*.ts',
+			'packages/cognitive-brain/memory/src/adapters/mobile/**/*.ts',
+			'packages/cognitive-brain/storage-suite/src/utils/speechPolyfill.ts',
+		],
+		extends: [tseslint.configs.disableTypeChecked],
 	},
 ])

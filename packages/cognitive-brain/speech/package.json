@@ -1,0 +1,23 @@
+{
+    "name": "@page-agent/speech",
+    "private": true,
+    "version": "1.12.4",
+    "type": "module",
+    "main": "./src/index.ts",
+    "types": "./src/index.ts",
+    "exports": {
+        ".": {
+            "types": "./src/index.ts",
+            "default": "./src/index.ts"
+        },
+        "./punctuation-score": {
+            "types": "./src/punctuationScore.ts",
+            "default": "./src/punctuationScore.ts"
+        }
+    },
+    "description": "Platform-neutral speech-to-text logic: the SttEngine contract, model presets, utterance cutting, echo cancellation between mic and call audio, session/segment handling and voice-activity attribution. Engines live elsewhere (web: @page-agent/speech-web).",
+    "license": "MIT",
+    "scripts": {
+        "test": "vitest run"
+    }
+}

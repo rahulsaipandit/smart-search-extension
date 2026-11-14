@@ -1,0 +1,15 @@
+export { MCPVaultClient } from './MCPVaultClient'
+export type { MCPVaultConfig } from './MCPVaultClient'
+export { NullVaultProvider } from './NullVaultProvider'
+export { ObsidianVaultProvider } from './ObsidianVaultProvider'
+export type { ObsidianVaultConfig } from './ObsidianVaultProvider'
+// Browser-compatible providers (no Node.js deps)
+export { ObsidianRestVaultProvider } from './ObsidianRestVaultProvider'
+export type { ObsidianRestConfig } from './ObsidianRestVaultProvider'
+export { GitHubVaultProvider } from './GitHubVaultProvider'
+export type { GitHubVaultConfig } from './GitHubVaultProvider'
+export { toMkdf, fromMkdf } from './MkdfAdapter'
+export type { MkdfDocument, MkdfFrontmatter } from './MkdfAdapter'
+// GuideAxon change (2026-10-08): Open Knowledge Format v0.2 helpers and the front-matter reader/writer
+export { inferPageType, toOkfActor, toOkfV02 } from './okf'
+export { parseFrontmatterYaml, serialiseFrontmatterYaml } from './frontmatterYaml'

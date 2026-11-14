@@ -5,14 +5,17 @@
     "type": "module",
     "workspaces": [
         "packages/ui",
-        "packages/llms",
-        "packages/memory",
+        "packages/cognitive-brain/llms",
+        "packages/cognitive-brain/storage-suite",
+        "packages/cognitive-brain/core",
+        "packages/cognitive-brain/memory",
+        "packages/cognitive-brain/access-policy",
+        "packages/cognitive-brain/business-logic",
+        "packages/cognitive-brain/speech",
         "packages/graph-viewer",
         "packages/mcp",
         "packages/extension",
-        "packages/e2e",
-        "packages/companion-app",
-        "packages/website"
+        "packages/e2e"
     ],
     "description": "AI-powered UI agent for web applications",
     "author": "Simon<gaomeng1900>",
